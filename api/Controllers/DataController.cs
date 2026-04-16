@@ -8,95 +8,89 @@ namespace TrailBuddy.Api.Controllers;
 [Route("api")]
 public sealed class DataController : ControllerBase
 {
-    private readonly MySqlConnectionFactory _connectionFactory;
+    /// <summary>Cap for list endpoints; raise if you need full-table exports.</summary>
+    private const int MaxListRows = 100_000;
 
-    public DataController(MySqlConnectionFactory connectionFactory)
+    private readonly MySqlConnectionFactory _connectionFactory;
+    private readonly IWebHostEnvironment _environment;
+
+    public DataController(MySqlConnectionFactory connectionFactory, IWebHostEnvironment environment)
     {
         _connectionFactory = connectionFactory;
+        _environment = environment;
     }
 
     [HttpGet("trips")]
-    public async Task<IActionResult> GetTrips(CancellationToken cancellationToken)
-    {
-        var rows = await QueryEntityAsync(
-            ["trips", "trip", "hiking_trips", "hikes"],
+    public Task<IActionResult> GetTrips(CancellationToken cancellationToken) =>
+        QueryListOrDatabaseUnavailableAsync(
+            ["hikingtrip", "hiking_trip", "trips", "trip", "hiking_trips", "hikes"],
             new Dictionary<string, string[]>
             {
-                ["id"] = ["id", "trip_id", "tripid"],
-                ["name"] = ["name", "trip_name", "title"],
+                ["id"] = ["tripid", "id", "trip_id"],
+                ["name"] = ["tripname", "name", "trip_name", "title"],
                 ["location"] = ["location", "trail_location", "park", "destination"],
-                ["difficulty"] = ["difficulty", "difficulty_level", "level"],
+                ["difficulty"] = ["difficultylevel", "difficulty", "difficulty_level", "level"],
                 ["price"] = ["price", "trip_price", "cost"],
                 ["distance"] = ["distance", "miles", "distance_miles"],
                 ["date"] = ["date", "trip_date", "hike_date"],
                 ["category"] = ["category", "trip_category", "type"],
-                ["hikers"] = ["hikers", "number_of_hikers", "max_hikers", "group_size"],
+                ["hikers"] = ["numberofhikers", "hikers", "number_of_hikers", "max_hikers", "group_size"],
                 ["time"] = ["time", "start_time", "meeting_time"]
             },
             cancellationToken);
 
-        return Ok(rows);
-    }
-
     [HttpGet("reservations")]
-    public async Task<IActionResult> GetReservations(CancellationToken cancellationToken)
-    {
-        var rows = await QueryEntityAsync(
-            ["reservations", "reservation", "bookings", "booking"],
+    public Task<IActionResult> GetReservations(CancellationToken cancellationToken) =>
+        QueryListOrDatabaseUnavailableAsync(
+            ["reservation", "reservations", "bookings", "booking"],
             new Dictionary<string, string[]>
             {
-                ["id"] = ["id", "reservation_id", "booking_id"],
-                ["trip"] = ["trip", "trip_name", "trip_title"],
-                ["customer"] = ["customer", "customer_name", "full_name"],
-                ["date"] = ["date", "reservation_date", "booking_date"],
-                ["seats"] = ["seats", "number_of_hikers", "hikers", "party_size"],
-                ["status"] = ["status", "reservation_status", "booking_status"]
+                ["id"] = ["reservationid", "id", "reservation_id", "booking_id"],
+                ["tripId"] = ["tripid", "trip_id"],
+                ["customerId"] = ["customerid", "customer_id"],
+                ["employeeId"] = ["employeeid", "employee_id"],
+                ["date"] = ["reservationdate", "date", "booking_date"],
+                ["seats"] = ["numberofhikers", "seats", "party_size"],
+                ["status"] = ["resstatus", "status", "reservation_status", "booking_status"],
+                ["time"] = ["reservationtime", "time", "booking_time"]
             },
             cancellationToken);
-
-        return Ok(rows);
-    }
 
     [HttpGet("customers")]
-    public async Task<IActionResult> GetCustomers(CancellationToken cancellationToken)
-    {
-        var rows = await QueryEntityAsync(
-            ["customers", "customer", "clients", "client"],
+    public Task<IActionResult> GetCustomers(CancellationToken cancellationToken) =>
+        QueryListOrDatabaseUnavailableAsync(
+            ["customer", "customers", "clients", "client"],
             new Dictionary<string, string[]>
             {
-                ["id"] = ["id", "customer_id", "client_id"],
-                ["name"] = ["name", "customer_name", "full_name"],
+                ["id"] = ["customerid", "id", "customer_id", "client_id"],
+                ["fname"] = ["fname", "first_name", "firstname"],
+                ["lname"] = ["lname", "last_name", "lastname"],
                 ["email"] = ["email", "email_address"],
-                ["phone"] = ["phone", "phone_number"],
-                ["city"] = ["city", "location", "home_city"]
+                ["birthday"] = ["birthday", "dob"],
+                ["registrationdate"] = ["registrationdate", "registration_date", "created_at"]
             },
             cancellationToken);
-
-        return Ok(rows);
-    }
 
     [HttpGet("employees")]
-    public async Task<IActionResult> GetEmployees(CancellationToken cancellationToken)
-    {
-        var rows = await QueryEntityAsync(
-            ["employees", "employee", "staff"],
+    public Task<IActionResult> GetEmployees(CancellationToken cancellationToken) =>
+        QueryListOrDatabaseUnavailableAsync(
+            ["employee", "employees", "staff"],
             new Dictionary<string, string[]>
             {
-                ["id"] = ["id", "employee_id", "staff_id"],
-                ["name"] = ["name", "employee_name", "full_name"],
+                ["id"] = ["employeeid", "id", "employee_id", "staff_id"],
                 ["role"] = ["role", "job_title", "position"],
                 ["department"] = ["department", "team", "division"],
-                ["email"] = ["email", "email_address"]
+                ["salary"] = ["salary"],
+                ["availability"] = ["availability"],
+                ["email"] = ["email", "email_address"],
+                ["birthday"] = ["birthday", "dob"],
+                ["bonus"] = ["bonus"]
             },
             cancellationToken);
 
-        return Ok(rows);
-    }
-
     [HttpGet("reports")]
-    public async Task<IActionResult> GetReports(CancellationToken cancellationToken)
-    {
-        var rows = await QueryEntityAsync(
+    public Task<IActionResult> GetReports(CancellationToken cancellationToken) =>
+        QueryListOrDatabaseUnavailableAsync(
             ["reports", "report"],
             new Dictionary<string, string[]>
             {
@@ -106,53 +100,83 @@ public sealed class DataController : ControllerBase
             },
             cancellationToken);
 
-        return Ok(rows);
-    }
-
     [HttpGet("schema")]
     public async Task<IActionResult> GetSchema(CancellationToken cancellationToken)
     {
-        await using var connection = _connectionFactory.CreateConnection();
-        await connection.OpenAsync(cancellationToken);
-
-        const string tablesSql = """
-            SELECT table_name
-            FROM information_schema.tables
-            WHERE table_schema = DATABASE()
-            ORDER BY table_name;
-            """;
-
-        var result = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
-
-        await using (var tableCmd = new MySqlCommand(tablesSql, connection))
-        await using (var tableReader = await tableCmd.ExecuteReaderAsync(cancellationToken))
+        try
         {
-            while (await tableReader.ReadAsync(cancellationToken))
+            await using var connection = _connectionFactory.CreateConnection();
+            await connection.OpenAsync(cancellationToken);
+
+            const string tablesSql = """
+                SELECT table_name
+                FROM information_schema.tables
+                WHERE table_schema = DATABASE()
+                ORDER BY table_name;
+                """;
+
+            var result = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+
+            await using (var tableCmd = new MySqlCommand(tablesSql, connection))
+            await using (var tableReader = await tableCmd.ExecuteReaderAsync(cancellationToken))
             {
-                var table = tableReader.GetString(0);
-                result[table] = [];
+                while (await tableReader.ReadAsync(cancellationToken))
+                {
+                    var table = tableReader.GetString(0);
+                    result[table] = [];
+                }
             }
+
+            const string columnsSql = """
+                SELECT table_name, column_name
+                FROM information_schema.columns
+                WHERE table_schema = DATABASE()
+                ORDER BY table_name, ordinal_position;
+                """;
+
+            await using var colCmd = new MySqlCommand(columnsSql, connection);
+            await using var colReader = await colCmd.ExecuteReaderAsync(cancellationToken);
+            while (await colReader.ReadAsync(cancellationToken))
+            {
+                var table = colReader.GetString(0);
+                var column = colReader.GetString(1);
+                if (!result.ContainsKey(table))
+                    result[table] = [];
+                result[table].Add(column);
+            }
+
+            return Ok(result);
         }
-
-        const string columnsSql = """
-            SELECT table_name, column_name
-            FROM information_schema.columns
-            WHERE table_schema = DATABASE()
-            ORDER BY table_name, ordinal_position;
-            """;
-
-        await using var colCmd = new MySqlCommand(columnsSql, connection);
-        await using var colReader = await colCmd.ExecuteReaderAsync(cancellationToken);
-        while (await colReader.ReadAsync(cancellationToken))
+        catch (MySqlException ex)
         {
-            var table = colReader.GetString(0);
-            var column = colReader.GetString(1);
-            if (!result.ContainsKey(table))
-                result[table] = [];
-            result[table].Add(column);
+            return DatabaseUnavailable(ex);
         }
+    }
 
-        return Ok(result);
+    private async Task<IActionResult> QueryListOrDatabaseUnavailableAsync(
+        IReadOnlyList<string> tableCandidates,
+        IReadOnlyDictionary<string, string[]> outputColumns,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var rows = await QueryEntityAsync(tableCandidates, outputColumns, cancellationToken);
+            return Ok(rows);
+        }
+        catch (MySqlException ex)
+        {
+            return DatabaseUnavailable(ex);
+        }
+    }
+
+    private ObjectResult DatabaseUnavailable(MySqlException ex)
+    {
+        var detail = _environment.IsDevelopment() ? ex.Message : "Check connection string, VPN, and RDS security groups.";
+        return StatusCode(StatusCodes.Status503ServiceUnavailable, new
+        {
+            error = "database_unavailable",
+            message = detail
+        });
     }
 
     private async Task<List<Dictionary<string, object?>>> QueryEntityAsync(
@@ -174,7 +198,7 @@ public sealed class DataController : ControllerBase
             .Select(kvp => BuildSelectPart(kvp.Key, kvp.Value, available))
             .ToArray();
 
-        var sql = $"SELECT {string.Join(", ", selectParts)} FROM `{tableName}` LIMIT 500;";
+        var sql = $"SELECT {string.Join(", ", selectParts)} FROM `{tableName}` LIMIT {MaxListRows};";
         await using var command = new MySqlCommand(sql, connection);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
 

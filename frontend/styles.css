@@ -37,9 +37,14 @@ h6,
 }
 
 #app {
-  max-width: 1200px;
+  max-width: min(100%, 1600px);
   margin: 0 auto;
-  padding: 6.2rem 1rem 2rem;
+  padding: 6.2rem clamp(1rem, 2vw, 2rem) 3rem;
+}
+
+/* Home dashboard: extra scroll room for long tables */
+.tb-dashboard-anchor {
+  scroll-margin-top: 5.5rem;
 }
 
 .tb-navbar {

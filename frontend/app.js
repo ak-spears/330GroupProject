@@ -1,6 +1,16 @@
 const appElement = document.querySelector("#app");
 const navLinks = Array.from(document.querySelectorAll("#nav-links .nav-link"));
 
+if (window.location.protocol === "file:") {
+  const strip = document.createElement("div");
+  strip.className = "text-center py-2 px-3 small";
+  strip.style.cssText =
+    "background:#7a5a00;color:#fff;font-weight:600;border-bottom:2px solid #5c4300;";
+  strip.textContent =
+    "This page was opened as a local file (file://). For TrailBuddy, run the API from the api folder (dotnet run) and open http://localhost:5286/ in the browser — not the HTML file from Finder.";
+  document.body.insertBefore(strip, document.body.firstChild);
+}
+
 const fallbackSampleData = {
   trips: [
     {
@@ -75,11 +85,42 @@ const state = {
   selectedTripId: null
 };
 
+/**
+ * Relative fetch("/api/...") only works when the page is served over http(s) from the same host
+ * as the API (e.g. `dotnet run` in /api). Opening index.html as file:// makes the browser resolve
+ * /api as file:///api/... which fails. Set window.TRAILBUDDY_API_BASE before this script if needed.
+ */
+function getApiBase() {
+  if (typeof window.TRAILBUDDY_API_BASE === "string" && window.TRAILBUDDY_API_BASE.trim() !== "") {
+    return window.TRAILBUDDY_API_BASE.trim().replace(/\/$/, "");
+  }
+  if (window.location.protocol === "file:") {
+    return "http://localhost:5286";
+  }
+  return "";
+}
+
+function apiUrl(path) {
+  const base = getApiBase();
+  const normalized = path.startsWith("/") ? path : `/${path}`;
+  return `${base}${normalized}`;
+}
+
 const difficultyClassMap = {
   Easy: "tb-difficulty-easy",
+  easy: "tb-difficulty-easy",
   Moderate: "tb-difficulty-moderate",
-  Hard: "tb-difficulty-hard"
+  moderate: "tb-difficulty-moderate",
+  Hard: "tb-difficulty-hard",
+  hard: "tb-difficulty-hard",
+  Extreme: "tb-difficulty-hard",
+  extreme: "tb-difficulty-hard"
 };
+
+function difficultyBadgeClass(difficulty) {
+  const key = normalizeText(difficulty, "Moderate");
+  return difficultyClassMap[key] || difficultyClassMap[key.toLowerCase()] || "tb-difficulty-moderate";
+}
 
 function money(amount) {
   const numeric = Number(amount ?? 0);
@@ -103,9 +144,18 @@ function statusBadgeClass(status) {
 }
 
 async function fetchJson(endpoint) {
-  const response = await fetch(endpoint);
+  const url = apiUrl(endpoint);
+  const response = await fetch(url);
   if (!response.ok) {
-    throw new Error(`${endpoint} failed (${response.status})`);
+    let detail = "";
+    try {
+      const body = await response.json();
+      if (body && body.message) detail = ` — ${body.message}`;
+      else if (body && body.error) detail = ` — ${body.error}`;
+    } catch {
+      /* ignore */
+    }
+    throw new Error(`${url} failed (${response.status})${detail}`);
   }
   return response.json();
 }
@@ -121,13 +171,17 @@ function normalizeNumber(value, fallback = 0) {
 }
 
 function normalizeTrip(row) {
+  const dist = row.distance;
+  const distanceLabel =
+    dist == null || dist === "" ? "TBD" : typeof dist === "number" ? `${dist}` : normalizeText(dist, "TBD");
+
   return {
     id: normalizeNumber(row.id),
     name: normalizeText(row.name, "Unnamed Trip"),
     location: normalizeText(row.location, "Unknown location"),
     difficulty: normalizeText(row.difficulty, "Moderate"),
     price: normalizeNumber(row.price),
-    distance: normalizeText(row.distance, "TBD"),
+    distance: distanceLabel,
     date: normalizeText(row.date, "TBD"),
     category: normalizeText(row.category, "General"),
     hikers: normalizeNumber(row.hikers),
@@ -135,34 +189,69 @@ function normalizeTrip(row) {
   };
 }
 
+function coalesceNumericId(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
 function normalizeReservation(row) {
   return {
     id: normalizeText(row.id, "-"),
-    trip: normalizeText(row.trip, "Unknown trip"),
-    customer: normalizeText(row.customer, "Unknown customer"),
+    tripId: coalesceNumericId(row.tripId ?? row.tripid),
+    customerId: coalesceNumericId(row.customerId ?? row.customerid),
+    employeeId: coalesceNumericId(row.employeeId ?? row.employeeid),
+    trip: normalizeText(row.trip, ""),
+    customer: normalizeText(row.customer, ""),
     date: normalizeText(row.date, "-"),
     seats: normalizeNumber(row.seats),
-    status: normalizeText(row.status, "Pending")
+    status: normalizeText(row.status, "Pending"),
+    time: normalizeText(row.time, "")
   };
 }
 
+function enrichReservationsWithLabels(reservations, trips, customers) {
+  const tripById = new Map(trips.map((t) => [t.id, t.name]));
+  const customerById = new Map(customers.map((c) => [Number(c.id), c.name]));
+
+  return reservations.map((r) => ({
+    ...r,
+    trip:
+      r.trip ||
+      (r.tripId != null ? tripById.get(r.tripId) : null) ||
+      (r.tripId != null ? `Trip #${r.tripId}` : "—"),
+    customer:
+      r.customer ||
+      (r.customerId != null ? customerById.get(r.customerId) : null) ||
+      (r.customerId != null ? `Customer #${r.customerId}` : "—")
+  }));
+}
+
 function normalizeCustomer(row) {
+  const fname = normalizeText(row.fname, "");
+  const lname = normalizeText(row.lname, "");
+  const fromParts = [fname, lname].filter(Boolean).join(" ").trim();
   return {
     id: normalizeText(row.id, "-"),
-    name: normalizeText(row.name, "Unknown"),
+    name: normalizeText(row.name, fromParts || "Unknown"),
     email: normalizeText(row.email, "-"),
     phone: normalizeText(row.phone, "-"),
-    city: normalizeText(row.city, "-")
+    city: normalizeText(row.city, "-"),
+    birthday: normalizeText(row.birthday, "-"),
+    registrationdate: normalizeText(row.registrationdate, "-")
   };
 }
 
 function normalizeEmployee(row) {
+  const id = normalizeText(row.id, "-");
+  const email = normalizeText(row.email, "");
   return {
-    id: normalizeText(row.id, "-"),
-    name: normalizeText(row.name, "Unknown"),
+    id,
+    name: normalizeText(row.name, email ? email : `Employee ${id}`),
     role: normalizeText(row.role, "-"),
     department: normalizeText(row.department, "-"),
-    email: normalizeText(row.email, "-")
+    email,
+    salary: row.salary != null ? row.salary : "—",
+    availability: normalizeText(row.availability, "-")
   };
 }
 
@@ -176,25 +265,40 @@ function normalizeReport(row) {
 
 async function loadData() {
   try {
-    const [trips, reservations, customers, employees, reports] = await Promise.all([
-      fetchJson("/api/trips"),
-      fetchJson("/api/reservations"),
-      fetchJson("/api/customers"),
-      fetchJson("/api/employees"),
-      fetchJson("/api/reports")
-    ]);
+    const dbCheck = await fetch(apiUrl("/api/health/database"));
+    const dbJson = await dbCheck.json().catch(() => ({}));
+    if (!dbCheck.ok) {
+      console.warn("MySQL not reachable:", dbJson.message || dbCheck.status);
+    } else {
+      console.log("MySQL:", dbJson.database === true ? "connected" : dbJson);
+    }
+
+    // One request at a time keeps concurrent MySQL connections at ~1 (helps small RDS / low max_connections).
+    const trips = await fetchJson("/api/trips");
+    const reservations = await fetchJson("/api/reservations");
+    const customers = await fetchJson("/api/customers");
+    const employees = await fetchJson("/api/employees");
+    const reports = await fetchJson("/api/reports");
 
     dataStore.trips = (Array.isArray(trips) ? trips : []).map(normalizeTrip);
-    dataStore.reservations = (Array.isArray(reservations) ? reservations : []).map(normalizeReservation);
     dataStore.customers = (Array.isArray(customers) ? customers : []).map(normalizeCustomer);
+    dataStore.reservations = enrichReservationsWithLabels(
+      (Array.isArray(reservations) ? reservations : []).map(normalizeReservation),
+      dataStore.trips,
+      dataStore.customers
+    );
     dataStore.employees = (Array.isArray(employees) ? employees : []).map(normalizeEmployee);
     dataStore.reports = (Array.isArray(reports) ? reports : []).map(normalizeReport);
     state.selectedTripId = dataStore.trips[0]?.id ?? null;
   } catch (error) {
     console.error("Failed to load API data:", error);
     dataStore.trips = fallbackSampleData.trips.map(normalizeTrip);
-    dataStore.reservations = fallbackSampleData.reservations.map(normalizeReservation);
     dataStore.customers = fallbackSampleData.customers.map(normalizeCustomer);
+    dataStore.reservations = enrichReservationsWithLabels(
+      fallbackSampleData.reservations.map(normalizeReservation),
+      dataStore.trips,
+      dataStore.customers
+    );
     dataStore.employees = fallbackSampleData.employees.map(normalizeEmployee);
     dataStore.reports = fallbackSampleData.reports.map(normalizeReport);
     state.selectedTripId = dataStore.trips[0]?.id ?? null;
@@ -213,8 +317,211 @@ function emptyState(message) {
   `;
 }
 
+function reservationsTableRowsMarkup() {
+  if (dataStore.reservations.length === 0) {
+    return `
+              <tr>
+                <td colspan="6" class="text-center tb-muted py-4">No reservations yet.</td>
+              </tr>`;
+  }
+  return dataStore.reservations
+    .map(
+      (res) => `
+              <tr>
+                <td>${res.id}</td>
+                <td>${escapeHtml(res.trip)}</td>
+                <td>${escapeHtml(res.customer)}</td>
+                <td>${res.date}</td>
+                <td>${res.seats}</td>
+                <td>
+                  <span class="badge text-dark ${statusBadgeClass(res.status)}">${res.status}</span>
+                </td>
+              </tr>`
+    )
+    .join("");
+}
+
+function reservationsSectionMarkup(forDashboard) {
+  const h = forDashboard ? "h2" : "h1";
+  const hClass = forDashboard ? "h3 mb-0" : "h2 mb-0";
+  const sectionOpen = forDashboard
+    ? '<section id="dash-reservations" class="tb-section tb-dashboard-anchor">'
+    : '<section class="tb-section">';
+  return `
+    ${sectionOpen}
+      <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+        <${h} class="${hClass}">Reservations</${h}>
+        <span class="tb-muted">${dataStore.reservations.length} total</span>
+      </div>
+      <div class="table-responsive tb-table-wrap">
+        <table class="table table-hover mb-0 align-middle">
+          <thead>
+            <tr>
+              <th>Reservation ID</th>
+              <th>Trip</th>
+              <th>Customer</th>
+              <th>Date</th>
+              <th>Seats</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${reservationsTableRowsMarkup()}
+          </tbody>
+        </table>
+      </div>
+    </section>`;
+}
+
+function customersTableRowsMarkup() {
+  if (dataStore.customers.length === 0) {
+    return `
+              <tr>
+                <td colspan="5" class="text-center tb-muted py-4">No customers yet.</td>
+              </tr>`;
+  }
+  return dataStore.customers
+    .map(
+      (customer) => `
+              <tr>
+                <td>${customer.id}</td>
+                <td>${escapeHtml(customer.name)}</td>
+                <td>${escapeHtml(customer.email)}</td>
+                <td>${escapeHtml(customer.phone)}</td>
+                <td>${escapeHtml(customer.city)}</td>
+              </tr>`
+    )
+    .join("");
+}
+
+function customersSectionMarkup(forDashboard) {
+  const h = forDashboard ? "h2" : "h1";
+  const hClass = forDashboard ? "h3 mb-0" : "h2 mb-0";
+  const sectionOpen = forDashboard
+    ? '<section id="dash-customers" class="tb-section tb-dashboard-anchor">'
+    : '<section class="tb-section">';
+  return `
+    ${sectionOpen}
+      <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+        <${h} class="${hClass}">Customers</${h}>
+        <span class="tb-muted">${dataStore.customers.length} total</span>
+      </div>
+      <div class="table-responsive tb-table-wrap">
+        <table class="table table-striped mb-0 align-middle">
+          <thead>
+            <tr>
+              <th>Customer ID</th>
+              <th>Name</th>
+              <th>Email</th>
+              <th>Phone</th>
+              <th>City</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${customersTableRowsMarkup()}
+          </tbody>
+        </table>
+      </div>
+    </section>`;
+}
+
+function employeesTableRowsMarkup() {
+  if (dataStore.employees.length === 0) {
+    return `
+              <tr>
+                <td colspan="5" class="text-center tb-muted py-4">No employees yet.</td>
+              </tr>`;
+  }
+  return dataStore.employees
+    .map(
+      (employee) => `
+              <tr>
+                <td>${employee.id}</td>
+                <td>${escapeHtml(employee.name)}</td>
+                <td>${escapeHtml(employee.role)}</td>
+                <td>${escapeHtml(employee.department)}</td>
+                <td>${escapeHtml(employee.email)}</td>
+              </tr>`
+    )
+    .join("");
+}
+
+function employeesSectionMarkup(forDashboard) {
+  const h = forDashboard ? "h2" : "h1";
+  const hClass = forDashboard ? "h3 mb-0" : "h2 mb-0";
+  const sectionOpen = forDashboard
+    ? '<section id="dash-employees" class="tb-section tb-dashboard-anchor">'
+    : '<section class="tb-section">';
+  return `
+    ${sectionOpen}
+      <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+        <${h} class="${hClass}">Employees</${h}>
+        <span class="tb-muted">${dataStore.employees.length} total</span>
+      </div>
+      <div class="table-responsive tb-table-wrap">
+        <table class="table table-striped mb-0 align-middle">
+          <thead>
+            <tr>
+              <th>Employee ID</th>
+              <th>Name</th>
+              <th>Role</th>
+              <th>Department</th>
+              <th>Email</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${employeesTableRowsMarkup()}
+          </tbody>
+        </table>
+      </div>
+    </section>`;
+}
+
+function reportsCardsMarkup() {
+  if (dataStore.reports.length === 0) {
+    return `
+          <div class="col-12">
+            <article class="card tb-card tb-report-card h-100">
+              <div class="card-body">
+                <h2 class="h5 card-title">No Reports Loaded</h2>
+                <p class="mb-0 tb-muted">Report placeholders will render from your sample data.</p>
+              </div>
+            </article>
+          </div>`;
+  }
+  return dataStore.reports
+    .map(
+      (report) => `
+          <div class="col-md-6 col-xl-4">
+            <article class="card tb-card tb-report-card h-100">
+              <div class="card-body">
+                <h2 class="h5 card-title">${escapeHtml(report.title)}</h2>
+                <p class="mb-2 tb-muted">${escapeHtml(report.description)}</p>
+                <span class="badge bg-secondary">${escapeHtml(report.period)}</span>
+              </div>
+            </article>
+          </div>`
+    )
+    .join("");
+}
+
+function reportsSectionMarkup(forDashboard) {
+  const h = forDashboard ? "h2" : "h1";
+  const hClass = forDashboard ? "h3 mb-3" : "h2 mb-3";
+  const sectionOpen = forDashboard
+    ? '<section id="dash-reports" class="tb-section tb-dashboard-anchor">'
+    : '<section class="tb-section">';
+  return `
+    ${sectionOpen}
+      <${h} class="${hClass}">Reports</${h}>
+      <div class="row g-3">
+        ${reportsCardsMarkup()}
+      </div>
+    </section>`;
+}
+
 function renderHome() {
-  const featured = dataStore.trips.slice(0, 3);
+  const allTrips = dataStore.trips;
   return `
     <section class="tb-hero">
       <div class="row align-items-center g-4">
@@ -233,26 +540,30 @@ function renderHome() {
       </div>
     </section>
 
-    <section class="tb-section">
-      <div class="d-flex justify-content-between align-items-center mb-3">
-        <h2 class="h3 mb-0">Featured Trips</h2>
-        <button class="btn btn-sm tb-btn-primary" data-route-btn="trips">See All</button>
+    <p class="tb-muted mb-0 tb-section">
+      <strong>Home</strong> shows every section on one page (scroll). Use the nav links for a single full-width view of each area.
+    </p>
+
+    <section id="dash-trips" class="tb-section tb-dashboard-anchor">
+      <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+        <h2 class="h3 mb-0">All Trips <span class="tb-muted fs-6 fw-normal">(${allTrips.length})</span></h2>
+        <button class="btn btn-sm tb-btn-primary" data-route-btn="trips">Trips only</button>
       </div>
       <div class="row g-3">
         ${
-          featured.length === 0
+          allTrips.length === 0
             ? `
           <div class="col-12">
             <article class="card h-100 tb-card">
               <div class="card-body">
-                <h3 class="h5 card-title mb-2">No Featured Trips Yet</h3>
-                <p class="tb-muted mb-0">Add trips to the sample data and featured cards will appear here.</p>
+                <h3 class="h5 card-title mb-2">No Trips Yet</h3>
+                <p class="tb-muted mb-0">Trips from the API will list here.</p>
               </div>
             </article>
           </div>
         `
             : `
-        ${featured
+        ${allTrips
           .map(
             (trip) => `
           <div class="col-md-6 col-lg-4">
@@ -260,7 +571,7 @@ function renderHome() {
               <div class="card-body">
                 <div class="d-flex justify-content-between align-items-start mb-2">
                   <h3 class="h5 card-title mb-0">${escapeHtml(trip.name)}</h3>
-                  <span class="badge tb-badge ${difficultyClassMap[trip.difficulty]}">${trip.difficulty}</span>
+                  <span class="badge tb-badge ${difficultyBadgeClass(trip.difficulty)}">${trip.difficulty}</span>
                 </div>
                 <p class="tb-muted mb-1">${escapeHtml(trip.location)}</p>
                 <p class="mb-3">${trip.distance} trail • ${trip.date}</p>
@@ -278,6 +589,11 @@ function renderHome() {
         }
       </div>
     </section>
+
+    ${reservationsSectionMarkup(true)}
+    ${customersSectionMarkup(true)}
+    ${employeesSectionMarkup(true)}
+    ${reportsSectionMarkup(true)}
   `;
 }
 
@@ -310,7 +626,7 @@ function renderTrips() {
               <div class="card-body d-flex flex-column">
                 <div class="d-flex justify-content-between align-items-start mb-2">
                   <h2 class="h5 card-title mb-0">${escapeHtml(trip.name)}</h2>
-                  <span class="badge tb-badge ${difficultyClassMap[trip.difficulty]}">${trip.difficulty}</span>
+                  <span class="badge tb-badge ${difficultyBadgeClass(trip.difficulty)}">${trip.difficulty}</span>
                 </div>
                 <p class="tb-muted mb-1">${escapeHtml(trip.location)}</p>
                 <p class="mb-2">${trip.category}</p>
@@ -357,7 +673,7 @@ function renderTripDetail() {
               <p class="tb-muted mb-0">${escapeHtml(trip.location)}</p>
             </div>
             <div class="text-end">
-              <span class="badge tb-badge ${difficultyClassMap[trip.difficulty]} mb-2">${trip.difficulty}</span>
+              <span class="badge tb-badge ${difficultyBadgeClass(trip.difficulty)} mb-2">${trip.difficulty}</span>
               <p class="h4 mb-0">${money(trip.price)}</p>
             </div>
           </div>
@@ -382,179 +698,19 @@ function renderTripDetail() {
 }
 
 function renderReservations() {
-  return `
-    <section class="tb-section">
-      <h1 class="h2 mb-3">Reservations</h1>
-      <div class="table-responsive tb-table-wrap">
-        <table class="table table-hover mb-0 align-middle">
-          <thead>
-            <tr>
-              <th>Reservation ID</th>
-              <th>Trip</th>
-              <th>Customer</th>
-              <th>Date</th>
-              <th>Seats</th>
-              <th>Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${
-              dataStore.reservations.length === 0
-                ? `
-              <tr>
-                <td colspan="6" class="text-center tb-muted py-4">No reservations yet.</td>
-              </tr>
-            `
-                : dataStore.reservations
-                  .map(
-                    (res) => `
-              <tr>
-                <td>${res.id}</td>
-                <td>${escapeHtml(res.trip)}</td>
-                <td>${escapeHtml(res.customer)}</td>
-                <td>${res.date}</td>
-                <td>${res.seats}</td>
-                <td>
-                  <span class="badge text-dark ${statusBadgeClass(res.status)}">${res.status}</span>
-                </td>
-              </tr>
-            `
-                  )
-                  .join("")
-            }
-          </tbody>
-        </table>
-      </div>
-    </section>
-  `;
+  return reservationsSectionMarkup(false);
 }
 
 function renderCustomers() {
-  return `
-    <section class="tb-section">
-      <h1 class="h2 mb-3">Customers</h1>
-      <div class="table-responsive tb-table-wrap">
-        <table class="table table-striped mb-0 align-middle">
-          <thead>
-            <tr>
-              <th>Customer ID</th>
-              <th>Name</th>
-              <th>Email</th>
-              <th>Phone</th>
-              <th>City</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${
-              dataStore.customers.length === 0
-                ? `
-              <tr>
-                <td colspan="5" class="text-center tb-muted py-4">No customers yet.</td>
-              </tr>
-            `
-                : dataStore.customers
-                  .map(
-                    (customer) => `
-              <tr>
-                <td>${customer.id}</td>
-                <td>${escapeHtml(customer.name)}</td>
-                <td>${escapeHtml(customer.email)}</td>
-                <td>${escapeHtml(customer.phone)}</td>
-                <td>${escapeHtml(customer.city)}</td>
-              </tr>
-            `
-                  )
-                  .join("")
-            }
-          </tbody>
-        </table>
-      </div>
-    </section>
-  `;
+  return customersSectionMarkup(false);
 }
 
 function renderEmployees() {
-  return `
-    <section class="tb-section">
-      <h1 class="h2 mb-3">Employees</h1>
-      <div class="table-responsive tb-table-wrap">
-        <table class="table table-striped mb-0 align-middle">
-          <thead>
-            <tr>
-              <th>Employee ID</th>
-              <th>Name</th>
-              <th>Role</th>
-              <th>Department</th>
-              <th>Email</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${
-              dataStore.employees.length === 0
-                ? `
-              <tr>
-                <td colspan="5" class="text-center tb-muted py-4">No employees yet.</td>
-              </tr>
-            `
-                : dataStore.employees
-                  .map(
-                    (employee) => `
-              <tr>
-                <td>${employee.id}</td>
-                <td>${escapeHtml(employee.name)}</td>
-                <td>${escapeHtml(employee.role)}</td>
-                <td>${escapeHtml(employee.department)}</td>
-                <td>${escapeHtml(employee.email)}</td>
-              </tr>
-            `
-                  )
-                  .join("")
-            }
-          </tbody>
-        </table>
-      </div>
-    </section>
-  `;
+  return employeesSectionMarkup(false);
 }
 
 function renderReports() {
-  return `
-    <section class="tb-section">
-      <h1 class="h2 mb-3">Reports</h1>
-      <div class="row g-3">
-        ${
-          dataStore.reports.length === 0
-            ? `
-          <div class="col-12">
-            <article class="card tb-card tb-report-card h-100">
-              <div class="card-body">
-                <h2 class="h5 card-title">No Reports Loaded</h2>
-                <p class="mb-0 tb-muted">Report placeholders will render from your sample data.</p>
-              </div>
-            </article>
-          </div>
-        `
-            : `
-        ${dataStore.reports
-          .map(
-            (report) => `
-          <div class="col-md-6 col-xl-4">
-            <article class="card tb-card tb-report-card h-100">
-              <div class="card-body">
-                <h2 class="h5 card-title">${escapeHtml(report.title)}</h2>
-                <p class="mb-2 tb-muted">${escapeHtml(report.description)}</p>
-                <span class="badge bg-secondary">${escapeHtml(report.period)}</span>
-              </div>
-            </article>
-          </div>
-        `
-          )
-          .join("")}
-        `
-        }
-      </div>
-    </section>
-  `;
+  return reportsSectionMarkup(false);
 }
 
 function updateActiveNav() {

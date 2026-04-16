@@ -1,9 +1,9 @@
 using Microsoft.Extensions.FileProviders;
 using TrailBuddy.Api.Data;
 
-LoadRepoRootEnvIntoEnvironment();
-
 var builder = WebApplication.CreateBuilder(args);
+
+ApplyDotEnvToConfiguration(builder.Configuration, builder.Environment.ContentRootPath);
 
 builder.Services.AddControllers();
 builder.Services.AddSingleton<MySqlConnectionFactory>();
@@ -19,7 +19,10 @@ builder.Services.AddCors(options =>
 
 var app = builder.Build();
 
-app.UseHttpsRedirection();
+// HTTP-only dev runs (e.g. profile `http`) have no HTTPS port → redirection logs a warning and adds no value.
+if (!app.Environment.IsDevelopment())
+    app.UseHttpsRedirection();
+
 app.UseCors();
 
 var frontendPath = Path.GetFullPath(Path.Combine(app.Environment.ContentRootPath, "..", "frontend"));
@@ -36,11 +39,22 @@ app.MapControllers();
 
 app.Run();
 
-static void LoadRepoRootEnvIntoEnvironment()
+/// <summary>
+/// Loads the first existing .env from known locations and merges into configuration.
+/// Fixes IDE/debug runs where <see cref="Directory.GetCurrentDirectory"/> is not the <c>api/</c> folder.
+/// </summary>
+static void ApplyDotEnvToConfiguration(ConfigurationManager configuration, string contentRoot)
 {
-    var apiProjectDir = Directory.GetCurrentDirectory();
-    var path = Path.GetFullPath(Path.Combine(apiProjectDir, "..", ".env"));
-    if (!File.Exists(path))
+    var candidates = new[]
+    {
+        Path.GetFullPath(Path.Combine(contentRoot, "..", ".env")),
+        Path.GetFullPath(Path.Combine(contentRoot, ".env")),
+        Path.GetFullPath(Path.Combine(Directory.GetCurrentDirectory(), ".env")),
+        Path.GetFullPath(Path.Combine(Directory.GetCurrentDirectory(), "..", ".env"))
+    };
+
+    var path = candidates.FirstOrDefault(File.Exists);
+    if (path is null)
         return;
 
     foreach (var rawLine in File.ReadAllLines(path))
@@ -58,9 +72,14 @@ static void LoadRepoRootEnvIntoEnvironment()
         if (key.Length == 0)
             continue;
 
-        if (string.Equals(key, "Connection_String", StringComparison.OrdinalIgnoreCase))
-            Environment.SetEnvironmentVariable("ConnectionStrings__Default", value);
+        if (IsDatabaseConnectionKey(key))
+            configuration["ConnectionStrings:Default"] = value;
         else
-            Environment.SetEnvironmentVariable(key, value);
+            configuration[key] = value;
     }
 }
+
+static bool IsDatabaseConnectionKey(string key) =>
+    string.Equals(key, "Connection_String", StringComparison.OrdinalIgnoreCase)
+    || string.Equals(key, "CONNECTION_STRING", StringComparison.Ordinal)
+    || string.Equals(key, "ConnectionString", StringComparison.OrdinalIgnoreCase);

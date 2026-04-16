@@ -5,6 +5,11 @@ Accept: application/json
 
 ###
 
+GET {{api_HostAddress}}/api/health/database
+Accept: application/json
+
+###
+
 GET {{api_HostAddress}}/api/schema
 Accept: application/json
 

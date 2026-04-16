@@ -16,9 +16,12 @@ cd api
 dotnet run
 ```
 
-Open **http://localhost:5286/** (or the URL printed in the terminal). The API hosts files from `../frontend`, so `fetch('/api/health')` in `app.js` matches the same origin.
+Open **http://localhost:5286/** (or the URL printed in the terminal). The API hosts files from `../frontend`, so `fetch('/api/...')` hits the same origin.
+
+**Do not** open `frontend/index.html` via **File → Open** (`file://`) unless the API is already running: `app.js` will call **http://localhost:5286** for API routes in that case. If your API uses another host/port, set `window.TRAILBUDDY_API_BASE` in `index.html` before loading `app.js`.
 
 - Health check: `GET /api/health` → `{ "status": "ok" }`
+- Database check: `GET /api/health/database` → `{ "status": "ok", "database": true }` when `.env` `Connection_String` reaches MySQL (or503 with a message)
 
 ## Run the frontend alone (optional)
 
@@ -28,7 +31,7 @@ If you open `frontend/index.html` via `file://` or a static server **without** t
 
 1. Create a MySQL database and user.
 2. Apply `database/schema.sql` when tables exist.
-3. **Recommended:** put your MySQL URL in a **repo root** `.env` file as `Connection_String=...` (see `.gitignore`). When you `cd api && dotnet run`, the host loads that file and maps it to `ConnectionStrings:Default` for `MySqlConnectionFactory` and raw SQL. Alternatively set `ConnectionStrings:Default` in user secrets or environment variables; avoid committing real passwords.
+3. **Recommended:** put your MySQL URL in a **repo root** `.env` file as `Connection_String=...` (see `.gitignore`). The API loads the first file found among: `../.env` and `.env` next to the project folder, plus the same two relative to the process current directory (so it still works when the IDE sets cwd to the repo root). Values are merged into `Configuration` (not only environment variables). If the DB is unreachable, list endpoints return **503** JSON `{ "error": "database_unavailable", "message": "..." }` instead of a generic 500.
 
 ## Project layout
 
