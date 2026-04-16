@@ -38,8 +38,8 @@ app.Run();
 
 static void LoadRepoRootEnvIntoEnvironment()
 {
-    var backendDir = Directory.GetCurrentDirectory();
-    var path = Path.GetFullPath(Path.Combine(backendDir, "..", ".env"));
+    var apiProjectDir = Directory.GetCurrentDirectory();
+    var path = Path.GetFullPath(Path.Combine(apiProjectDir, "..", ".env"));
     if (!File.Exists(path))
         return;
 
