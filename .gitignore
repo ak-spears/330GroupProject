@@ -1,0 +1,14 @@
+# Secrets — never commit
+.env
+.env.local
+*.user
+
+# .NET
+bin/
+obj/
+[Bb]uild/
+[Ll]og/
+[Ll]ogs/
+
+# OS / IDE
+.DS_Store

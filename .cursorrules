@@ -1,0 +1,139 @@
+# MIS321 PA3 — stack (agent + human)
+
+## Frontend
+
+- Single HTML entry: one `index.html` with a root container (e.g. `id="app"`).
+- Vanilla JavaScript only (ES6+). No React, Vue, Angular, etc.
+- Drive all UI via DOM updates inside that container.
+- Bootstrap 5 from CDN for layout/components; optional Bootstrap bundle JS.
+- No npm/bundlers for app code; no extra HTML pages for feature flows.
+
+## Backend
+
+- ASP.NET Core Web API, C#.
+- RESTful endpoints with appropriate HTTP methods and status codes.
+
+## Database
+
+- MySQL.
+- Hand-written SQL only; no ORM (no EF, no Dapper-style mapping layers).
+
+## Layout
+
+- Keep frontend and backend in separate folders (e.g. `frontend/`, `api/` or `backend/`).
+- Connection string in `appsettings.json` (or env as required); do not commit secrets.
+
+## Style
+
+- 2 spaces: HTML/CSS/JS; 4 spaces: C#.
+- `async`/`await` for I/O; meaningful names; focused functions.
+
+When implementing features, follow this stack strictly unless the assignment README says otherwise.
+
+#Project Technology Stack & Guidelines 
+
+ 
+
+## Frontend 
+
+- **HTML/CSS**: Single-page application with one `index.html` file containing a div with id="app" 
+
+- **JavaScript**: Plain vanilla JavaScript (ES6+), no frameworks like React, Vue, or Angular 
+
+  - All user interface changes must be done through JavaScript manipulating the DOM 
+
+  - Use JavaScript to dynamically create, update, and remove elements within the "app" div 
+
+- **Styling**: Bootstrap 5.x from CDN for all UI components and styling 
+
+  - Use Bootstrap classes extensively instead of custom CSS 
+
+  - Only write custom CSS when Bootstrap doesn't provide the needed functionality 
+
+  - Bootstrap CDN: `https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css` 
+
+  - Bootstrap JS CDN: `https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js` 
+
+ 
+
+: RESTful API design w ## Backend 
+
+- **Framework**: .NET API (ASP.NET Core Web API) 
+
+- **Language**: C#!!
+
+- **Target Framework**: .NET 8.0 or latest LTS version 
+
+- **Architecture** ith proper HTTP methods and status codes 
+
+ 
+
+## Database 
+
+- **Type**: MySQL database 
+
+- **Data Access**: Write SQL queries directly, no ORM 
+
+- **Connection String**: Store in `appsettings.json` for simplicity (e.g., "Data Source=./api/database.db") 
+
+ 
+
+## Project Structure Guidelines 
+
+- Keep frontend and backend in separate folders/directories 
+
+- Use clear naming conventions for files and folders 
+
+- Follow .NET naming conventions for C# code (PascalCase for classes, camelCase for variables) 
+
+- Use meaningful variable and function names in JavaScript 
+
+ 
+
+## Development Practices 
+
+- Write clean, readable code with appropriate comments 
+
+- Use async/await for API calls in JavaScript 
+
+- Implement proper error handling in both frontend and backend 
+
+- Use Bootstrap's responsive design principles 
+
+- Follow REST API best practices for the backend 
+
+- Use proper HTTP status codes and error responses 
+
+ 
+
+## File Organization 
+
+- Frontend files: Single `index.html` file with JavaScript files in a dedicated frontend folder 
+
+- Backend files: C# project files in a dedicated backend folder 
+
+- Documentation: Keep any documentation files in the project root 
+
+ 
+
+## Dependencies 
+
+- Frontend: Only Bootstrap from CDN, no npm/node_modules 
+
+- Backend: Use NuGet packages as needed for .NET dependencies 
+
+- Database: MySqlConnector package for direct SQL access 
+
+ 
+
+## Code Style 
+
+- Use consistent indentation (2 spaces for HTML/CSS/JS, 4 spaces for C#) 
+
+- Comment complex logic and API endpoints 
+
+- Use meaningful commit messages 
+
+- Keep functions and methods focused and single-purpose 
+
+ 

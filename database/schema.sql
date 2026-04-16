@@ -1,0 +1,1 @@
+-- TrailBuddy MySQL schema: table definitions will be added here (raw SQL only).
