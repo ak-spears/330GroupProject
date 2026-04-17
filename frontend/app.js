@@ -1,15 +1,7 @@
 const appElement = document.querySelector("#app");
-const navLinks = Array.from(document.querySelectorAll("#nav-links .nav-link"));
-
-if (window.location.protocol === "file:") {
-  const strip = document.createElement("div");
-  strip.className = "text-center py-2 px-3 small";
-  strip.style.cssText =
-    "background:#7a5a00;color:#fff;font-weight:600;border-bottom:2px solid #5c4300;";
-  strip.textContent =
-    "This page was opened as a local file (file://). For TrailBuddy, run the API from the api folder (dotnet run) and open http://localhost:5286/ in the browser — not the HTML file from Finder.";
-  document.body.insertBefore(strip, document.body.firstChild);
-}
+const navLinksContainer = document.querySelector("#nav-links");
+const navbarCollapse = document.querySelector("#trailBuddyNav");
+const headerElement = document.querySelector("header");
 
 const fallbackSampleData = {
   trips: [
@@ -85,6 +77,45 @@ const state = {
   selectedTripId: null
 };
 
+let currentUser = null;
+let authView = "login";
+const currentUserStorageKey = "trailbuddy.currentUser";
+
+const roleRoutes = {
+  hiker: ["home", "trips", "reservations"],
+  employee: ["home", "trips", "reservations", "customers"],
+  admin: ["home", "trips", "reservations", "customers", "employees", "reports"]
+};
+
+function loadStoredCurrentUser() {
+  try {
+    const raw = window.localStorage.getItem(currentUserStorageKey);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return null;
+
+    const role = normalizeText(parsed.role, "").toLowerCase();
+    if (!roleRoutes[role]) return null;
+
+    return {
+      role,
+      id: parsed.id ?? null,
+      name: normalizeText(parsed.name, "User")
+    };
+  } catch {
+    return null;
+  }
+}
+
+function saveCurrentUser() {
+  try {
+    if (currentUser) window.localStorage.setItem(currentUserStorageKey, JSON.stringify(currentUser));
+    else window.localStorage.removeItem(currentUserStorageKey);
+  } catch {
+    /* ignore localStorage failures */
+  }
+}
+
 /**
  * Relative fetch("/api/...") only works when the page is served over http(s) from the same host
  * as the API (e.g. `dotnet run` in /api). Opening index.html as file:// makes the browser resolve
@@ -158,6 +189,30 @@ async function fetchJson(endpoint) {
     throw new Error(`${url} failed (${response.status})${detail}`);
   }
   return response.json();
+}
+
+async function postJson(endpoint, payload) {
+  const response = await fetch(apiUrl(endpoint), {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload)
+  });
+
+  let body = null;
+  try {
+    body = await response.json();
+  } catch {
+    body = null;
+  }
+
+  if (!response.ok) {
+    const message = body?.message || `${endpoint} failed (${response.status})`;
+    throw new Error(message);
+  }
+
+  return body;
 }
 
 function normalizeText(value, fallback = "") {
@@ -522,6 +577,7 @@ function reportsSectionMarkup(forDashboard) {
 
 function renderHome() {
   const allTrips = dataStore.trips;
+  const allowed = getAllowedRoutes().filter((route) => route !== "home");
   return `
     <section class="tb-hero">
       <div class="row align-items-center g-4">
@@ -540,9 +596,30 @@ function renderHome() {
       </div>
     </section>
 
-    <p class="tb-muted mb-0 tb-section">
-      <strong>Home</strong> shows every section on one page (scroll). Use the nav links for a single full-width view of each area.
-    </p>
+    <section class="tb-section">
+      <article class="card tb-card">
+        <div class="card-body">
+          <h2 class="h4 mb-2">Welcome, ${escapeHtml(currentUser?.name || "TrailBuddy user")}</h2>
+          <p class="tb-muted mb-3">
+            Your pages are separated by role. Use the nav to open only the sections your account can access.
+          </p>
+          <div class="d-flex flex-wrap gap-2">
+            ${allowed
+              .map((route) => {
+                const labelMap = {
+                  trips: "Trips",
+                  reservations: currentUser?.role === "hiker" ? "My Reservations" : "Reservations",
+                  customers: "Customers",
+                  employees: "Employees",
+                  reports: "Reports"
+                };
+                return `<button class="btn btn-sm tb-btn-outline" data-route-btn="${route}">${labelMap[route] || route}</button>`;
+              })
+              .join("")}
+          </div>
+        </div>
+      </article>
+    </section>
 
     <section id="dash-trips" class="tb-section tb-dashboard-anchor">
       <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
@@ -589,11 +666,66 @@ function renderHome() {
         }
       </div>
     </section>
+  `;
+}
 
-    ${reservationsSectionMarkup(true)}
-    ${customersSectionMarkup(true)}
-    ${employeesSectionMarkup(true)}
-    ${reportsSectionMarkup(true)}
+function renderAuthCard() {
+  const isLogin = authView === "login";
+  return `
+    <section class="tb-section">
+      <div class="row justify-content-center">
+        <div class="col-12 col-md-8 col-lg-5">
+          <article class="card tb-card">
+            <div class="card-body p-4">
+              <h1 class="h3 mb-3">${isLogin ? "Login to TrailBuddy" : "Create TrailBuddy Account"}</h1>
+              <div id="auth-message" class="alert d-none mb-3" role="alert"></div>
+              <form id="${isLogin ? "login-form" : "register-form"}" class="d-grid gap-3">
+                ${
+                  isLogin
+                    ? ""
+                    : `
+                  <div class="row g-3">
+                    <div class="col-6">
+                      <label class="form-label" for="register-fname">First name</label>
+                      <input id="register-fname" name="fname" class="form-control" required />
+                    </div>
+                    <div class="col-6">
+                      <label class="form-label" for="register-lname">Last name</label>
+                      <input id="register-lname" name="lname" class="form-control" required />
+                    </div>
+                  </div>
+                  <div>
+                    <label class="form-label" for="register-role">Account type</label>
+                    <select id="register-role" name="role" class="form-select" required>
+                      <option value="hiker" selected>Hiker</option>
+                      <option value="employee">Employee</option>
+                      <option value="admin">Admin</option>
+                    </select>
+                  </div>
+                `
+                }
+                <div>
+                  <label class="form-label" for="auth-email">Email</label>
+                  <input id="auth-email" name="email" type="email" class="form-control" required />
+                </div>
+                <div>
+                  <label class="form-label" for="auth-password">Password</label>
+                  <input id="auth-password" name="password" type="password" class="form-control" required />
+                </div>
+                <button class="btn tb-btn-primary" type="submit">${isLogin ? "Login" : "Register"}</button>
+              </form>
+              <p class="mb-0 mt-3">
+                ${
+                  isLogin
+                    ? `Need an account? <a href="#" data-auth-view="register">Register</a>`
+                    : `Already have an account? <a href="#" data-auth-view="login">Login</a>`
+                }
+              </p>
+            </div>
+          </article>
+        </div>
+      </div>
+    </section>
   `;
 }
 
@@ -602,7 +734,10 @@ function renderTrips() {
     <section class="tb-section">
       <div class="d-flex justify-content-between align-items-center mb-3">
         <h1 class="h2 mb-0">All Hiking Trips</h1>
-        <span class="tb-muted">${dataStore.trips.length} trips available</span>
+        <div class="d-flex align-items-center gap-2">
+          <span class="tb-muted">${dataStore.trips.length} trips available</span>
+          <button class="btn btn-sm tb-btn-primary" data-bs-toggle="modal" data-bs-target="#addTripModal">Add Trip</button>
+        </div>
       </div>
       <div class="row g-3">
         ${
@@ -645,6 +780,64 @@ function renderTrips() {
         }
       </div>
     </section>
+
+    <div class="modal fade" id="addTripModal" tabindex="-1" aria-labelledby="addTripModalLabel" aria-hidden="true">
+      <div class="modal-dialog modal-lg modal-dialog-scrollable">
+        <div class="modal-content">
+          <form id="add-trip-form">
+            <div class="modal-header">
+              <h2 class="modal-title h5 mb-0" id="addTripModalLabel">Add Trip</h2>
+              <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+              <div id="add-trip-message" class="alert d-none mb-3" role="alert"></div>
+              <div class="row g-3">
+                <div class="col-md-6">
+                  <label class="form-label" for="trip-name">Trip Name</label>
+                  <input class="form-control" id="trip-name" name="TripName" required>
+                </div>
+                <div class="col-md-6">
+                  <label class="form-label" for="trip-location">Location</label>
+                  <input class="form-control" id="trip-location" name="Location" required>
+                </div>
+                <div class="col-md-6">
+                  <label class="form-label" for="trip-distance">Distance</label>
+                  <input class="form-control" id="trip-distance" name="Distance" required>
+                </div>
+                <div class="col-md-6">
+                  <label class="form-label" for="trip-date">Date</label>
+                  <input type="date" class="form-control" id="trip-date" name="Date" required>
+                </div>
+                <div class="col-md-6">
+                  <label class="form-label" for="trip-price">Price</label>
+                  <input type="number" min="0" step="0.01" class="form-control" id="trip-price" name="Price" required>
+                </div>
+                <div class="col-md-6">
+                  <label class="form-label" for="trip-hikers">Number Of Hikers</label>
+                  <input type="number" min="1" class="form-control" id="trip-hikers" name="NumberOfHikers" required>
+                </div>
+                <div class="col-md-6">
+                  <label class="form-label" for="trip-difficulty">Difficulty Level</label>
+                  <input class="form-control" id="trip-difficulty" name="DifficultyLevel" required>
+                </div>
+                <div class="col-md-6">
+                  <label class="form-label" for="trip-category">Category</label>
+                  <input class="form-control" id="trip-category" name="Category" required>
+                </div>
+                <div class="col-md-6">
+                  <label class="form-label" for="trip-time">Time</label>
+                  <input type="time" class="form-control" id="trip-time" name="Time" required>
+                </div>
+              </div>
+            </div>
+            <div class="modal-footer">
+              <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+              <button type="submit" class="btn tb-btn-primary">Create Trip</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
   `;
 }
 
@@ -713,13 +906,84 @@ function renderReports() {
   return reportsSectionMarkup(false);
 }
 
+function getAllowedRoutes() {
+  if (!currentUser) return [];
+  return roleRoutes[currentUser.role] || [];
+}
+
+function canAccessRoute(route) {
+  if (!currentUser) return false;
+  return getAllowedRoutes().includes(route) || route === "trip-detail";
+}
+
+function normalizeRoute(route) {
+  if (!currentUser) return "login";
+  const allowed = getAllowedRoutes();
+  if (allowed.includes(route) || route === "trip-detail") return route;
+  return allowed[0] || "trips";
+}
+
+function updateNavbarForRole() {
+  if (!navLinksContainer || !navbarCollapse) return;
+
+  if (!currentUser) {
+    navLinksContainer.innerHTML = "";
+    return;
+  }
+
+  const labels = {
+    home: "Home",
+    trips: "Trips",
+    reservations: currentUser.role === "hiker" ? "My Reservations" : "Reservations",
+    customers: "Customers",
+    employees: "Employees",
+    reports: "Reports"
+  };
+
+  navLinksContainer.innerHTML = getAllowedRoutes()
+    .map((route) => `<li class="nav-item"><a class="nav-link" href="#" data-route="${route}">${labels[route] || route}</a></li>`)
+    .join("");
+
+  if (!document.querySelector("#logout-btn")) {
+    const logoutWrapper = document.createElement("div");
+    logoutWrapper.className = "ms-lg-3 mt-2 mt-lg-0 d-flex align-items-center gap-2";
+    logoutWrapper.innerHTML = `
+      <span class="small text-white-50">${escapeHtml(currentUser.name || currentUser.email || currentUser.role)}</span>
+      <button id="logout-btn" class="btn btn-sm btn-outline-light" type="button">Logout</button>
+    `;
+    navbarCollapse.appendChild(logoutWrapper);
+  } else {
+    const userLabel = navbarCollapse.querySelector(".small.text-white-50");
+    if (userLabel) userLabel.textContent = currentUser.name || currentUser.email || currentUser.role;
+  }
+}
+
+function removeLogoutUi() {
+  const logoutButton = document.querySelector("#logout-btn");
+  if (logoutButton) {
+    const wrapper = logoutButton.parentElement;
+    if (wrapper) wrapper.remove();
+  }
+}
+
 function updateActiveNav() {
+  const navLinks = Array.from(document.querySelectorAll("#nav-links .nav-link"));
   navLinks.forEach((link) => {
     link.classList.toggle("active", link.dataset.route === state.route);
   });
 }
 
 function render() {
+  if (!currentUser) {
+    if (headerElement) headerElement.classList.add("d-none");
+    appElement.innerHTML = renderAuthCard();
+    removeLogoutUi();
+    updateActiveNav();
+    return;
+  }
+
+  if (headerElement) headerElement.classList.remove("d-none");
+  state.route = normalizeRoute(state.route);
   if (state.route === "trips") appElement.innerHTML = renderTrips();
   else if (state.route === "trip-detail") appElement.innerHTML = renderTripDetail();
   else if (state.route === "reservations") appElement.innerHTML = renderReservations();
@@ -728,11 +992,12 @@ function render() {
   else if (state.route === "reports") appElement.innerHTML = renderReports();
   else appElement.innerHTML = renderHome();
 
+  updateNavbarForRole();
   updateActiveNav();
 }
 
 function goToRoute(route) {
-  state.route = route;
+  state.route = normalizeRoute(route);
   render();
 }
 
@@ -741,15 +1006,142 @@ document.addEventListener("click", (event) => {
   if (routeTarget) {
     event.preventDefault();
     const route = routeTarget.dataset.route || routeTarget.dataset.routeBtn;
+    if (!canAccessRoute(route)) {
+      state.route = "login";
+      render();
+      return;
+    }
     goToRoute(route);
+  }
+
+  const authViewTarget = event.target.closest("[data-auth-view]");
+  if (authViewTarget) {
+    event.preventDefault();
+    authView = authViewTarget.dataset.authView === "register" ? "register" : "login";
+    render();
+    return;
+  }
+
+  const logoutTarget = event.target.closest("#logout-btn");
+  if (logoutTarget) {
+    event.preventDefault();
+    currentUser = null;
+    saveCurrentUser();
+    authView = "login";
+    state.route = "login";
+    render();
+    return;
   }
 
   const detailTarget = event.target.closest("[data-trip-detail]");
   if (detailTarget) {
     event.preventDefault();
+    if (!canAccessRoute("trip-detail")) {
+      state.route = "login";
+      render();
+      return;
+    }
     state.selectedTripId = Number(detailTarget.dataset.tripDetail);
     goToRoute("trip-detail");
   }
 });
 
+document.addEventListener("submit", async (event) => {
+  const loginForm = event.target.closest("#login-form");
+  if (loginForm) {
+    event.preventDefault();
+    const messageElement = document.querySelector("#auth-message");
+    const formData = new FormData(loginForm);
+    const payload = {
+      email: String(formData.get("email") || "").trim(),
+      password: String(formData.get("password") || "")
+    };
+    try {
+      const result = await postJson("/api/auth/login", payload);
+      currentUser = {
+        role: normalizeText(result?.role, "hiker").toLowerCase(),
+        id: result?.id ?? null,
+        name: normalizeText(result?.name, "User")
+      };
+      saveCurrentUser();
+      state.route = "home";
+      await loadData();
+    } catch (error) {
+      if (messageElement) {
+        messageElement.className = "alert alert-danger mb-3";
+        messageElement.textContent = error?.message || "Login failed.";
+      }
+    }
+    return;
+  }
+
+  const registerForm = event.target.closest("#register-form");
+  if (registerForm) {
+    event.preventDefault();
+    const messageElement = document.querySelector("#auth-message");
+    const formData = new FormData(registerForm);
+    const payload = {
+      fname: String(formData.get("fname") || "").trim(),
+      lname: String(formData.get("lname") || "").trim(),
+      email: String(formData.get("email") || "").trim(),
+      password: String(formData.get("password") || ""),
+      role: String(formData.get("role") || "hiker").trim().toLowerCase()
+    };
+    try {
+      await postJson("/api/auth/register", payload);
+      authView = "login";
+      render();
+      const nextMessage = document.querySelector("#auth-message");
+      if (nextMessage) {
+        nextMessage.className = "alert alert-success mb-3";
+        nextMessage.textContent = "Registration successful. Please log in.";
+      }
+    } catch (error) {
+      if (messageElement) {
+        messageElement.className = "alert alert-danger mb-3";
+        messageElement.textContent = error?.message || "Registration failed.";
+      }
+    }
+    return;
+  }
+
+  const form = event.target.closest("#add-trip-form");
+  if (!form) return;
+
+  event.preventDefault();
+
+  const messageElement = document.querySelector("#add-trip-message");
+  if (messageElement) {
+    messageElement.className = "alert d-none mb-3";
+    messageElement.textContent = "";
+  }
+
+  const formData = new FormData(form);
+  const payload = {
+    TripName: String(formData.get("TripName") || "").trim(),
+    Location: String(formData.get("Location") || "").trim(),
+    Distance: String(formData.get("Distance") || "").trim(),
+    Date: String(formData.get("Date") || "").trim(),
+    Price: Number(formData.get("Price") || 0),
+    NumberOfHikers: Number(formData.get("NumberOfHikers") || 0),
+    DifficultyLevel: String(formData.get("DifficultyLevel") || "").trim(),
+    Category: String(formData.get("Category") || "").trim(),
+    Time: String(formData.get("Time") || "").trim()
+  };
+
+  try {
+    const result = await postJson("/api/trips", payload);
+    window.alert(`Trip created successfully (ID: ${result?.id ?? "N/A"}).`);
+    form.reset();
+    await loadData();
+  } catch (error) {
+    window.alert(error?.message || "Failed to create trip.");
+    if (messageElement) {
+      messageElement.className = "alert alert-danger mb-3";
+      messageElement.textContent = error?.message || "Failed to create trip.";
+    }
+  }
+});
+
+currentUser = loadStoredCurrentUser();
 loadData();
