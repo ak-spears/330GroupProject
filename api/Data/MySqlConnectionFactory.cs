@@ -12,9 +12,17 @@ public sealed class MySqlConnectionFactory
 
     public MySqlConnectionFactory(IConfiguration configuration)
     {
-        _connectionString = configuration.GetConnectionString("Default")
+        var raw = configuration.GetConnectionString("Default")
             ?? throw new InvalidOperationException(
                 "ConnectionStrings:Default is not configured. Set Connection_String in the repo root .env file or ConnectionStrings:Default in appsettings / user secrets.");
+
+        // RDS / legacy schemas may contain 0000-00-00 dates; default MySqlConnector throws on read.
+        var builder = new MySqlConnectionStringBuilder(raw)
+        {
+            ConvertZeroDateTime = true,
+            AllowZeroDateTime = true
+        };
+        _connectionString = builder.ConnectionString;
     }
 
     public MySqlConnection CreateConnection() => new(_connectionString);

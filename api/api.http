@@ -14,3 +14,14 @@ GET {{api_HostAddress}}/api/schema
 Accept: application/json
 
 ###
+
+POST {{api_HostAddress}}/api/book
+Content-Type: application/json
+
+{
+  "tripId": 1,
+  "customerId": 1,
+  "numberOfHikers": 2
+}
+
+###

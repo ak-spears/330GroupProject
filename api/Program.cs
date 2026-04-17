@@ -35,6 +35,9 @@ if (Directory.Exists(frontendPath))
 
 app.UseAuthorization();
 
+// Browsers still request /favicon.ico by default; we only ship favicon.svg in /frontend.
+app.MapGet("/favicon.ico", () => Results.Redirect("/favicon.svg", permanent: false));
+
 app.MapControllers();
 
 app.Run();

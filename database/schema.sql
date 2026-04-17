@@ -6,6 +6,8 @@ SET NAMES utf8mb4;
 
 CREATE TABLE employee (
   employeeid INT PRIMARY KEY AUTO_INCREMENT,
+  fname VARCHAR(25),
+  lname VARCHAR(25),
   role VARCHAR(25),
   department VARCHAR(25),
   salary DECIMAL(9,2),

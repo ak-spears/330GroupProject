@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
 using MySqlConnector;
+using TrailBuddy.Api.Data;
 
 namespace TrailBuddy.Api.Controllers;
 
@@ -20,10 +21,12 @@ public class HealthController : ControllerBase
     /// Verifies <c>ConnectionStrings:Default</c> (from .env <c>Connection_String</c>) can reach MySQL.
     /// </summary>
     [HttpGet("database")]
-    public async Task<IActionResult> Database([FromServices] IConfiguration configuration, CancellationToken cancellationToken)
+    public async Task<IActionResult> Database(
+        [FromServices] IConfiguration configuration,
+        [FromServices] MySqlConnectionFactory connectionFactory,
+        CancellationToken cancellationToken)
     {
-        var connectionString = configuration.GetConnectionString("Default");
-        if (string.IsNullOrWhiteSpace(connectionString))
+        if (string.IsNullOrWhiteSpace(configuration.GetConnectionString("Default")))
         {
             return StatusCode(StatusCodes.Status503ServiceUnavailable, new
             {
@@ -35,7 +38,7 @@ public class HealthController : ControllerBase
 
         try
         {
-            await using var connection = new MySqlConnection(connectionString);
+            await using var connection = connectionFactory.CreateConnection();
             await connection.OpenAsync(cancellationToken);
             await using var command = new MySqlCommand("SELECT 1;", connection);
             await command.ExecuteScalarAsync(cancellationToken);
