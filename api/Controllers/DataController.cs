@@ -446,19 +446,87 @@ public sealed class DataController : ControllerBase
             cancellationToken);
 
     [HttpGet("customers")]
-    public Task<IActionResult> GetCustomers(CancellationToken cancellationToken) =>
-        QueryListOrDatabaseUnavailableAsync(
-            ["customer", "customers", "clients", "client"],
-            new Dictionary<string, string[]>
+    public async Task<IActionResult> GetCustomers(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await using var connection = _connectionFactory.CreateConnection();
+            await connection.OpenAsync(cancellationToken);
+
+            var customerTable = await FindTableNameAsync(
+                connection,
+                ["customer", "customers", "clients", "client"],
+                cancellationToken);
+            if (customerTable is null)
+                return Ok(new List<Dictionary<string, object?>>());
+
+            var columns = await GetColumnsAsync(connection, customerTable, cancellationToken);
+            var available = new HashSet<string>(columns, StringComparer.OrdinalIgnoreCase);
+
+            var phoneTable = await FindTableNameAsync(connection, ["customerphone"], cancellationToken);
+
+            var selectParts = new List<string>
             {
-                ["id"] = ["customerid", "id", "customer_id", "client_id"],
-                ["fname"] = ["fname", "first_name", "firstname"],
-                ["lname"] = ["lname", "last_name", "lastname"],
-                ["email"] = ["email", "email_address"],
-                ["birthday"] = ["birthday", "dob"],
-                ["registrationdate"] = ["registrationdate", "registration_date", "created_at"]
-            },
-            cancellationToken);
+                BuildSelectPart("id", ["customerid", "id", "customer_id", "client_id"], available),
+                BuildSelectPart("fname", ["fname", "first_name", "firstname"], available),
+                BuildSelectPart("lname", ["lname", "last_name", "lastname"], available),
+                BuildSelectPart("email", ["email", "email_address"], available),
+                BuildSelectPart("birthday", ["birthday", "dob"], available),
+                BuildSelectPart(
+                    "registrationdate",
+                    ["registrationdate", "registration_date", "created_at"],
+                    available)
+            };
+
+            var idCol = new[] { "customerid", "id", "customer_id", "client_id" }.FirstOrDefault(available.Contains);
+            var phoneColOnCustomer = new[] { "phone", "phonenumber", "phone_number", "mobile", "cell", "primary_phone" }
+                .FirstOrDefault(available.Contains);
+
+            if (phoneColOnCustomer is not null)
+                selectParts.Add($"{Backtick(phoneColOnCustomer)} AS `phone`");
+            else if (phoneTable is not null && idCol is not null)
+            {
+                var phoneCols = await GetColumnsAsync(connection, phoneTable, cancellationToken);
+                var phoneAvail = new HashSet<string>(phoneCols, StringComparer.OrdinalIgnoreCase);
+                var pn = new[] { "phonenumber", "phone_number", "phone", "mobile" }.FirstOrDefault(phoneAvail.Contains);
+                var fk = new[] { "customerid", "customer_id" }.FirstOrDefault(phoneAvail.Contains);
+                if (pn is not null && fk is not null)
+                {
+                    selectParts.Add(
+                        $"(SELECT GROUP_CONCAT({Backtick(pn)} ORDER BY {Backtick(pn)} SEPARATOR ', ') FROM {Backtick(phoneTable)} cp WHERE cp.{Backtick(fk)} = {Backtick(customerTable)}.{Backtick(idCol)}) AS `phone`");
+                }
+                else
+                    selectParts.Add("NULL AS `phone`");
+            }
+            else
+                selectParts.Add("NULL AS `phone`");
+
+            selectParts.Add(BuildSelectPart("city", ["city", "home_city", "town"], available));
+
+            var sql = $"SELECT {string.Join(", ", selectParts)} FROM {Backtick(customerTable)} LIMIT {MaxListRows};";
+            await using var command = new MySqlCommand(sql, connection);
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+
+            var rows = new List<Dictionary<string, object?>>();
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                var row = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+                for (var i = 0; i < reader.FieldCount; i++)
+                {
+                    var value = reader.IsDBNull(i) ? null : reader.GetValue(i);
+                    row[reader.GetName(i)] = NormalizeCellForJson(value);
+                }
+
+                rows.Add(row);
+            }
+
+            return Ok(rows);
+        }
+        catch (MySqlException ex)
+        {
+            return DatabaseUnavailable(ex);
+        }
+    }
 
     [HttpGet("employees")]
     public Task<IActionResult> GetEmployees(CancellationToken cancellationToken) =>
@@ -467,6 +535,8 @@ public sealed class DataController : ControllerBase
             new Dictionary<string, string[]>
             {
                 ["id"] = ["employeeid", "id", "employee_id", "staff_id"],
+                ["fname"] = ["fname", "first_name", "firstname"],
+                ["lname"] = ["lname", "last_name", "lastname"],
                 ["role"] = ["role", "job_title", "position"],
                 ["department"] = ["department", "team", "division"],
                 ["salary"] = ["salary"],
@@ -1075,8 +1145,11 @@ public sealed class DataController : ControllerBase
         if (string.IsNullOrWhiteSpace(match))
             return $"NULL AS `{outputName}`";
 
-        return $"`{match}` AS `{outputName}`";
+        return $"{Backtick(match)} AS `{outputName}`";
     }
+
+    private static string Backtick(string ident) =>
+        "`" + ident.Replace("`", "``", StringComparison.Ordinal) + "`";
 
     /// <summary>
     /// <see cref="Dictionary{TKey,TValue}"/> with <c>object?</c> values serializes <see cref="DateTime"/> as a JSON

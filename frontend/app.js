@@ -733,8 +733,11 @@ function normalizeCustomer(row) {
     lname,
     name: normalizeText(row.name, fromParts || "Unknown"),
     email: normalizeText(row.email, "-"),
-    phone: normalizeText(row.phone, "-"),
-    city: normalizeText(row.city, "-"),
+    phone: normalizeText(
+      row.phone ?? row.phonenumber ?? row.phoneNumber ?? row.primaryPhone ?? row.mobile,
+      "-"
+    ),
+    city: normalizeText(row.city ?? row.homeCity ?? row.town, "-"),
     birthday: normalizeText(row.birthday, "-"),
     birthdayInput: normalizeDateForInput(row.birthday),
     registrationdate: normalizeText(row.registrationdate, "-"),
@@ -745,15 +748,23 @@ function normalizeCustomer(row) {
 
 function normalizeEmployee(row) {
   const id = normalizeText(row.id, "-");
+  const fname = normalizeText(row.fname, "");
+  const lname = normalizeText(row.lname, "");
+  const fromParts = [fname, lname].filter(Boolean).join(" ").trim();
   const email = normalizeText(row.email, "");
   return {
     id,
-    name: normalizeText(row.name, email ? email : `Employee ${id}`),
+    fname,
+    lname,
+    name: normalizeText(row.name, fromParts || (email ? email : `Employee ${id}`)),
     role: normalizeText(row.role, "-"),
     department: normalizeText(row.department, "-"),
     email,
     salary: row.salary != null ? row.salary : "—",
-    availability: normalizeText(row.availability, "-")
+    availability: normalizeText(row.availability, "-"),
+    birthday: normalizeText(row.birthday, "-"),
+    birthdayInput: normalizeDateForInput(row.birthday),
+    bonus: row.bonus != null ? row.bonus : "—"
   };
 }
 
@@ -1089,11 +1100,11 @@ function reportBodyForKey(key, analytics) {
 }
 
 function ensureAdminCrudModals() {
-  if (document.getElementById("tb-admin-trip-edit-modal")) return;
   const maxBday = new Date().toISOString().slice(0, 10);
-  document.body.insertAdjacentHTML(
-    "beforeend",
-    `
+  if (!document.getElementById("tb-admin-trip-edit-modal")) {
+    document.body.insertAdjacentHTML(
+      "beforeend",
+      `
 <div class="modal fade" id="tb-admin-trip-edit-modal" tabindex="-1" aria-hidden="true">
   <div class="modal-dialog modal-lg modal-dialog-scrollable">
     <div class="modal-content">
@@ -1124,7 +1135,13 @@ function ensureAdminCrudModals() {
       </form>
     </div>
   </div>
-</div>
+</div>`.trim()
+    );
+  }
+  if (!document.getElementById("tb-admin-customer-modal")) {
+    document.body.insertAdjacentHTML(
+      "beforeend",
+      `
 <div class="modal fade" id="tb-admin-customer-modal" tabindex="-1" aria-hidden="true">
   <div class="modal-dialog modal-dialog-scrollable">
     <div class="modal-content">
@@ -1151,9 +1168,50 @@ function ensureAdminCrudModals() {
       </form>
     </div>
   </div>
-</div>
-`.trim()
-  );
+</div>`.trim()
+    );
+  }
+  if (!document.getElementById("tb-admin-employee-modal")) {
+    document.body.insertAdjacentHTML(
+      "beforeend",
+      `
+<div class="modal fade" id="tb-admin-employee-modal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-scrollable">
+    <div class="modal-content">
+      <form id="tb-admin-employee-form">
+        <div class="modal-header">
+          <h2 class="modal-title h5 mb-0" id="tb-admin-employee-title">Employee</h2>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <div class="modal-body">
+          <div id="tb-admin-employee-message" class="alert d-none mb-3" role="alert"></div>
+          <input type="hidden" id="admin-employee-id" name="employeeId" value="" />
+          <div class="row g-3">
+            <div class="col-md-6"><label class="form-label" for="admin-employee-fname">First name</label><input class="form-control" id="admin-employee-fname" name="fname" required autocomplete="given-name" /></div>
+            <div class="col-md-6"><label class="form-label" for="admin-employee-lname">Last name</label><input class="form-control" id="admin-employee-lname" name="lname" required autocomplete="family-name" /></div>
+            <div class="col-12"><label class="form-label" for="admin-employee-email">Email</label><input type="email" class="form-control" id="admin-employee-email" name="email" required autocomplete="email" /></div>
+            <div class="col-md-6"><label class="form-label" for="admin-employee-role">Role</label><select class="form-select" id="admin-employee-role" name="role" required>
+              <option value="employee">Guide / staff</option>
+              <option value="admin">Admin</option>
+            </select></div>
+            <div class="col-md-6"><label class="form-label" for="admin-employee-birthday">Date of birth</label><input type="date" class="form-control" id="admin-employee-birthday" name="birthday" required min="1900-01-01" max="${maxBday}" /></div>
+            <div class="col-12"><label class="form-label" for="admin-employee-password">Password</label><input type="password" class="form-control" id="admin-employee-password" name="password" autocomplete="new-password" /><p class="small tb-muted mb-0" id="admin-employee-password-hint"></p></div>
+            <div class="col-md-6"><label class="form-label" for="admin-employee-department">Department</label><input class="form-control" id="admin-employee-department" name="department" autocomplete="organization" /></div>
+            <div class="col-md-6"><label class="form-label" for="admin-employee-availability">Availability</label><input class="form-control" id="admin-employee-availability" name="availability" /></div>
+            <div class="col-md-6"><label class="form-label" for="admin-employee-salary">Salary</label><input type="number" min="0" step="0.01" class="form-control" id="admin-employee-salary" name="salary" value="0" /></div>
+            <div class="col-md-6"><label class="form-label" for="admin-employee-bonus">Bonus</label><input type="number" min="0" step="0.01" class="form-control" id="admin-employee-bonus" name="bonus" value="0" /></div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+          <button type="submit" class="btn tb-btn-primary">Save</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>`.trim()
+    );
+  }
 }
 
 async function loadData() {
@@ -1434,23 +1492,35 @@ function customersSectionMarkup(forDashboard) {
 }
 
 function employeesTableRowsMarkup() {
+  const adm = isAdmin();
+  const colspan = adm ? 6 : 5;
   if (dataStore.employees.length === 0) {
     return `
               <tr>
-                <td colspan="5" class="text-center tb-muted py-4">No employees yet.</td>
+                <td colspan="${colspan}" class="text-center tb-muted py-4">No employees yet.</td>
               </tr>`;
   }
   return dataStore.employees
-    .map(
-      (employee) => `
+    .map((employee) => {
+      const eid = coalesceNumericId(employee.id);
+      const idAttr = Number.isFinite(eid) && eid > 0 ? eid : "";
+      const actions =
+        adm && idAttr !== ""
+          ? `<td class="text-end text-nowrap">
+              <button type="button" class="btn btn-sm btn-outline-secondary me-1" data-admin-edit-employee="${idAttr}">Edit</button>
+              <button type="button" class="btn btn-sm btn-outline-danger" data-admin-del-employee="${idAttr}">Delete</button>
+            </td>`
+          : "";
+      return `
               <tr>
                 <td>${employee.id}</td>
                 <td>${escapeHtml(employee.name)}</td>
                 <td>${escapeHtml(employee.role)}</td>
                 <td>${escapeHtml(employee.department)}</td>
                 <td>${escapeHtml(employee.email)}</td>
-              </tr>`
-    )
+                ${actions}
+              </tr>`;
+    })
     .join("");
 }
 
@@ -1460,11 +1530,19 @@ function employeesSectionMarkup(forDashboard) {
   const sectionOpen = forDashboard
     ? '<section id="dash-employees" class="tb-section tb-dashboard-anchor">'
     : '<section class="tb-section">';
+  const adm = isAdmin();
   return `
     ${sectionOpen}
       <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
         <${h} class="${hClass}">Employees</${h}>
-        <span class="tb-muted">${dataStore.employees.length} total</span>
+        <div class="d-flex align-items-center gap-2 flex-wrap">
+          <span class="tb-muted">${dataStore.employees.length} total</span>
+          ${
+            adm
+              ? `<button type="button" class="btn btn-sm tb-btn-primary" data-admin-add-employee="1">Add employee</button>`
+              : ""
+          }
+        </div>
       </div>
       <div class="table-responsive tb-table-wrap">
         <table class="table table-striped mb-0 align-middle">
@@ -1475,6 +1553,7 @@ function employeesSectionMarkup(forDashboard) {
               <th>Role</th>
               <th>Department</th>
               <th>Email</th>
+              ${adm ? `<th class="text-end">Actions</th>` : ""}
             </tr>
           </thead>
           <tbody>
@@ -2975,6 +3054,104 @@ document.addEventListener("click", async (event) => {
     return;
   }
 
+  const adminAddEmployee = event.target.closest("[data-admin-add-employee]");
+  if (adminAddEmployee && isAdmin()) {
+    event.preventDefault();
+    ensureAdminCrudModals();
+    const form = document.getElementById("tb-admin-employee-form");
+    const msg = document.getElementById("tb-admin-employee-message");
+    if (msg) {
+      msg.className = "alert d-none mb-3";
+      msg.textContent = "";
+    }
+    if (form) form.reset();
+    const idEl = document.getElementById("admin-employee-id");
+    if (idEl) idEl.value = "";
+    const roleEl = document.getElementById("admin-employee-role");
+    if (roleEl) roleEl.value = "employee";
+    const sal = document.getElementById("admin-employee-salary");
+    if (sal) sal.value = "0";
+    const bon = document.getElementById("admin-employee-bonus");
+    if (bon) bon.value = "0";
+    const pw = document.getElementById("admin-employee-password");
+    if (pw) {
+      pw.required = true;
+      pw.value = "";
+    }
+    const hint = document.getElementById("admin-employee-password-hint");
+    if (hint) hint.textContent = "Choose a login password for this staff account.";
+    const title = document.getElementById("tb-admin-employee-title");
+    if (title) title.textContent = "Add employee";
+    if (window.bootstrap?.Modal) {
+      window.bootstrap.Modal.getOrCreateInstance(document.getElementById("tb-admin-employee-modal")).show();
+    }
+    return;
+  }
+
+  const adminEditEmployee = event.target.closest("[data-admin-edit-employee]");
+  if (adminEditEmployee && isAdmin()) {
+    event.preventDefault();
+    const eid = Number(adminEditEmployee.dataset.adminEditEmployee);
+    const e = dataStore.employees.find((row) => coalesceNumericId(row.id) === eid);
+    if (!e) return;
+    ensureAdminCrudModals();
+    const msg = document.getElementById("tb-admin-employee-message");
+    if (msg) {
+      msg.className = "alert d-none mb-3";
+      msg.textContent = "";
+    }
+    document.getElementById("admin-employee-id").value = String(eid);
+    document.getElementById("admin-employee-fname").value = e.fname || "";
+    document.getElementById("admin-employee-lname").value = e.lname || "";
+    document.getElementById("admin-employee-email").value = e.email || "";
+    document.getElementById("admin-employee-birthday").value = e.birthdayInput || "";
+    const roleRaw = String(e.role || "").trim().toLowerCase();
+    const roleEl = document.getElementById("admin-employee-role");
+    if (roleEl) roleEl.value = roleRaw === "admin" ? "admin" : "employee";
+    document.getElementById("admin-employee-department").value = e.department !== "-" ? e.department : "";
+    document.getElementById("admin-employee-availability").value = e.availability !== "-" ? e.availability : "";
+    const sal = document.getElementById("admin-employee-salary");
+    if (sal) sal.value = e.salary !== "—" && e.salary != null && e.salary !== "" ? String(e.salary) : "0";
+    const bon = document.getElementById("admin-employee-bonus");
+    if (bon) bon.value = e.bonus !== "—" && e.bonus != null && e.bonus !== "" ? String(e.bonus) : "0";
+    const pw = document.getElementById("admin-employee-password");
+    if (pw) {
+      pw.required = false;
+      pw.value = "";
+    }
+    const hint = document.getElementById("admin-employee-password-hint");
+    if (hint) hint.textContent = "Leave blank to keep the current password.";
+    const title = document.getElementById("tb-admin-employee-title");
+    if (title) title.textContent = "Edit employee";
+    if (window.bootstrap?.Modal) {
+      window.bootstrap.Modal.getOrCreateInstance(document.getElementById("tb-admin-employee-modal")).show();
+    }
+    return;
+  }
+
+  const adminDelEmployee = event.target.closest("[data-admin-del-employee]");
+  if (adminDelEmployee && isAdmin()) {
+    event.preventDefault();
+    const eid = Number(adminDelEmployee.dataset.adminDelEmployee);
+    if (!Number.isFinite(eid) || eid <= 0) return;
+    const ok = await confirmDialog({
+      title: "Delete employee?",
+      message:
+        "This removes the employee, their trip assignments, and any reservations where they were the assigned guide."
+    });
+    if (!ok) return;
+    (async () => {
+      try {
+        await adminDeleteJson(`/api/admin/employees/${eid}`);
+        state.flash = "Employee deleted.";
+        await loadData();
+      } catch (err) {
+        window.alert(err?.message || "Delete failed.");
+      }
+    })();
+    return;
+  }
+
   const cancelTarget = event.target.closest("[data-cancel-reservation]");
   if (cancelTarget) {
     event.preventDefault();
@@ -3082,6 +3259,71 @@ document.addEventListener("submit", async (event) => {
       const modalEl = document.getElementById("tb-admin-customer-modal");
       if (modalEl && window.bootstrap?.Modal) window.bootstrap.Modal.getOrCreateInstance(modalEl).hide();
       state.flash = idStr ? "Customer updated." : "Customer created.";
+      await loadData();
+    } catch (err) {
+      if (msg) {
+        msg.className = "alert alert-danger mb-3";
+        msg.textContent = err?.message || "Save failed.";
+        msg.classList.remove("d-none");
+      }
+    }
+    return;
+  }
+
+  const adminEmployeeForm = event.target.closest("#tb-admin-employee-form");
+  if (adminEmployeeForm && isAdmin()) {
+    event.preventDefault();
+    const msg = document.getElementById("tb-admin-employee-message");
+    if (msg) {
+      msg.className = "alert d-none mb-3";
+      msg.textContent = "";
+    }
+    const fd = new FormData(adminEmployeeForm);
+    const idStr = String(fd.get("employeeId") || "").trim();
+    const fname = String(fd.get("fname") || "").trim();
+    const lname = String(fd.get("lname") || "").trim();
+    const email = String(fd.get("email") || "").trim();
+    const birthday = String(fd.get("birthday") || "").trim();
+    const password = String(fd.get("password") || "").trim();
+    const role = String(fd.get("role") || "employee").trim();
+    const department = String(fd.get("department") || "").trim();
+    const availability = String(fd.get("availability") || "").trim();
+    const salary = Number(fd.get("salary"));
+    const bonus = Number(fd.get("bonus"));
+    try {
+      if (!Number.isFinite(salary) || salary < 0) throw new Error("Salary must be a non-negative number.");
+      if (!Number.isFinite(bonus) || bonus < 0) throw new Error("Bonus must be a non-negative number.");
+      if (!idStr) {
+        if (!password) throw new Error("Password is required for new employees.");
+        await adminPostJson("/api/admin/employees", {
+          Fname: fname,
+          Lname: lname,
+          Email: email,
+          Password: password,
+          Birthday: birthday,
+          Role: role,
+          Department: department,
+          Availability: availability,
+          Salary: salary,
+          Bonus: bonus
+        });
+      } else {
+        await adminPatchJson(`/api/admin/employees/${Number(idStr)}`, {
+          Fname: fname,
+          Lname: lname,
+          Email: email,
+          Birthday: birthday,
+          Role: role,
+          Department: department,
+          Availability: availability,
+          Salary: salary,
+          Bonus: bonus,
+          Password: password || null
+        });
+      }
+      const modalEl = document.getElementById("tb-admin-employee-modal");
+      if (modalEl && window.bootstrap?.Modal) window.bootstrap.Modal.getOrCreateInstance(modalEl).hide();
+      state.flash = idStr ? "Employee updated." : "Employee created.";
       await loadData();
     } catch (err) {
       if (msg) {
