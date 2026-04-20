@@ -26,45 +26,26 @@ public sealed class AuthController : ControllerBase
         await using var connection = _connectionFactory.CreateConnection();
         await connection.OpenAsync(cancellationToken);
 
-        var requestedRole = string.IsNullOrWhiteSpace(request.Role)
-            ? null
-            : request.Role.Trim().ToLowerInvariant();
-
-        if (requestedRole is not null && requestedRole is not ("hiker" or "employee" or "admin"))
-            return Unauthorized(new { error = "invalid_credentials" });
-
-        if (requestedRole is null or "hiker")
+        var customerUser = await FindCustomerAsync(connection, request.Email, cancellationToken);
+        if (customerUser is not null && VerifyPassword(request.Password, customerUser.PasswordHash))
         {
-            var customerUser = await FindCustomerAsync(connection, request.Email, cancellationToken);
-            if (customerUser is not null && VerifyPassword(request.Password, customerUser.PasswordHash))
+            return Ok(new
             {
-                return Ok(new
-                {
-                    role = "hiker",
-                    id = customerUser.Id,
-                    name = customerUser.Name
-                });
-            }
-
-            if (requestedRole == "hiker")
-                return Unauthorized(new { error = "invalid_credentials" });
+                role = "hiker",
+                id = customerUser.Id,
+                name = customerUser.Name
+            });
         }
 
-        if (requestedRole is null or "employee" or "admin")
+        var employeeUser = await FindEmployeeAsync(connection, request.Email, cancellationToken);
+        if (employeeUser is not null && VerifyPassword(request.Password, employeeUser.PasswordHash))
         {
-            var employeeUser = await FindEmployeeAsync(connection, request.Email, cancellationToken);
-            if (employeeUser is not null && VerifyPassword(request.Password, employeeUser.PasswordHash))
+            return Ok(new
             {
-                if (requestedRole is not null && employeeUser.Role != requestedRole)
-                    return Unauthorized(new { error = "invalid_credentials" });
-
-                return Ok(new
-                {
-                    role = employeeUser.Role,
-                    id = employeeUser.Id,
-                    name = employeeUser.Name
-                });
-            }
+                role = employeeUser.Role,
+                id = employeeUser.Id,
+                name = employeeUser.Name
+            });
         }
 
         return Unauthorized(new { error = "invalid_credentials" });
@@ -460,7 +441,7 @@ public sealed class AuthController : ControllerBase
         return new EmployeeUser(id, name, role, passwordHash);
     }
 
-    public sealed record LoginRequest(string Email, string Password, string? Role);
+    public sealed record LoginRequest(string Email, string Password);
     public sealed record RegisterRequest(string Fname, string Lname, string Email, string Password, string Birthday, string? Role);
     public sealed record ProfilePatchRequest(string Role, int UserId, string? Fname, string? Lname, string Email, string Birthday);
 
