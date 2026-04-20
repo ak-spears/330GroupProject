@@ -58,11 +58,36 @@ const fallbackSampleData = {
     { id: "E-303", name: "Elena Ford", role: "Support", department: "Customer Service", email: "elena@trailbuddy.com" }
   ],
   reports: [
-    { title: "Monthly Revenue", description: "Revenue by month with trend comparison.", period: "Last 12 months" },
-    { title: "Top Customers", description: "Highest lifetime spend by customer.", period: "Current year" },
-    { title: "Difficulty Breakdown", description: "Reservation volume by difficulty.", period: "Quarter to date" }
+    {
+      title: "View monthly revenue trends",
+      description: "Line or bar chart of recognized revenue by month.",
+      period: "Placeholder"
+    },
+    {
+      title: "View top customers by spending",
+      description: "Ranked customers by total reservation spend.",
+      period: "Placeholder"
+    },
+    {
+      title: "View top selling trip categories by revenue",
+      description: "Trip categories aggregated by booked revenue.",
+      period: "Placeholder"
+    },
+    {
+      title: "View trips by difficulty level",
+      description: "Trip counts or share by easy, moderate, and hard.",
+      period: "Placeholder"
+    },
+    {
+      title: "View reservation status breakdown",
+      description: "Pending, confirmed, cancelled, and other statuses.",
+      period: "Placeholder"
+    }
   ]
 };
+
+/** Admin Reports page: static cards until wired to analytics/export. */
+const adminReportPlaceholderRows = fallbackSampleData.reports;
 
 const dataStore = {
   trips: [],
@@ -103,6 +128,10 @@ const roleRoutes = {
   employee: ["home", "trips", "reservations", "customers"],
   admin: ["home", "trips", "reservations", "customers", "employees", "reports"]
 };
+
+function isAdmin() {
+  return currentUser?.role === "admin";
+}
 
 function loadStoredCurrentUser() {
   try {
@@ -288,6 +317,19 @@ function normalizeDateForInput(value) {
   return "";
 }
 
+/** 24h HH:mm for &lt;input type="time"&gt; from API TIME / string. */
+function normalizeTimeForInput(value) {
+  if (value == null) return "";
+  const raw = String(value).trim();
+  if (!raw) return "";
+  const m = raw.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+  if (!m) return "";
+  const hh = Math.min(23, Number(m[1]));
+  const mm = m[2];
+  if (!Number.isFinite(hh)) return "";
+  return `${String(hh).padStart(2, "0")}:${mm}`;
+}
+
 function escapeHtml(value) {
   return String(value)
     .replaceAll("&", "&amp;")
@@ -371,19 +413,88 @@ async function patchJson(endpoint, payload) {
 
 async function deleteJson(endpoint) {
   const response = await fetch(apiUrl(endpoint), { method: "DELETE" });
-
   let body = null;
   try {
     body = await response.json();
   } catch {
     body = null;
   }
-
   if (!response.ok) {
     const message = body?.message || `${endpoint} failed (${response.status})`;
     throw new Error(message);
   }
+  return body;
+}
 
+function adminHeadersJson() {
+  const h = { "Content-Type": "application/json" };
+  if (isAdmin() && Number.isFinite(Number(currentUser?.id))) {
+    h["X-TrailBuddy-Admin-Id"] = String(currentUser.id);
+  }
+  return h;
+}
+
+function adminHeadersDelete() {
+  const h = {};
+  if (isAdmin() && Number.isFinite(Number(currentUser?.id))) {
+    h["X-TrailBuddy-Admin-Id"] = String(currentUser.id);
+  }
+  return h;
+}
+
+async function adminPatchJson(endpoint, payload) {
+  const response = await fetch(apiUrl(endpoint), {
+    method: "PATCH",
+    headers: adminHeadersJson(),
+    body: JSON.stringify(payload)
+  });
+  let body = null;
+  try {
+    body = await response.json();
+  } catch {
+    body = null;
+  }
+  if (!response.ok) {
+    const message = body?.message || `${endpoint} failed (${response.status})`;
+    throw new Error(message);
+  }
+  return body;
+}
+
+async function adminPostJson(endpoint, payload) {
+  const response = await fetch(apiUrl(endpoint), {
+    method: "POST",
+    headers: adminHeadersJson(),
+    body: JSON.stringify(payload)
+  });
+  let body = null;
+  try {
+    body = await response.json();
+  } catch {
+    body = null;
+  }
+  if (!response.ok) {
+    const message = body?.message || `${endpoint} failed (${response.status})`;
+    throw new Error(message);
+  }
+  return body;
+}
+
+async function adminDeleteJson(endpoint) {
+  const response = await fetch(apiUrl(endpoint), {
+    method: "DELETE",
+    headers: adminHeadersDelete()
+  });
+  let body = null;
+  try {
+    body = await response.json();
+  } catch {
+    body = null;
+  }
+  if (!response.ok) {
+    const message = body?.message || `${endpoint} failed (${response.status})`;
+    throw new Error(message);
+  }
   return body;
 }
 
@@ -541,6 +652,16 @@ function normalizeTrip(row) {
   const dist = row.distance;
   const distanceLabel =
     dist == null || dist === "" ? "TBD" : typeof dist === "number" ? `${dist}` : normalizeText(dist, "TBD");
+  const distanceInput =
+    dist == null || dist === ""
+      ? ""
+      : typeof dist === "number"
+        ? String(dist)
+        : (() => {
+            const s = normalizeText(dist, "");
+            const n = Number(String(s).replace(/[^0-9.-]/g, ""));
+            return Number.isFinite(n) ? String(n) : s;
+          })();
 
   return {
     id: normalizeNumber(row.id),
@@ -549,7 +670,10 @@ function normalizeTrip(row) {
     difficulty: normalizeText(row.difficulty, "Moderate"),
     price: normalizeNumber(row.price),
     distance: distanceLabel,
+    distanceInput,
     date: normalizeText(row.date, "TBD"),
+    dateInput: normalizeDateForInput(row.date),
+    timeInput: normalizeTimeForInput(row.time),
     category: normalizeText(row.category, "General"),
     hikers: normalizeNumber(row.hikers),
     time: formatTimeAmPm(normalizeText(row.time, "TBD")) || "TBD"
@@ -599,11 +723,14 @@ function normalizeCustomer(row) {
   const fromParts = [fname, lname].filter(Boolean).join(" ").trim();
   return {
     id: normalizeText(row.id, "-"),
+    fname,
+    lname,
     name: normalizeText(row.name, fromParts || "Unknown"),
     email: normalizeText(row.email, "-"),
     phone: normalizeText(row.phone, "-"),
     city: normalizeText(row.city, "-"),
     birthday: normalizeText(row.birthday, "-"),
+    birthdayInput: normalizeDateForInput(row.birthday),
     registrationdate: normalizeText(row.registrationdate, "-"),
     tripId: coalesceNumericId(row.tripId ?? row.tripid),
     trip: normalizeText(row.trip, "")
@@ -630,6 +757,74 @@ function normalizeReport(row) {
     description: normalizeText(row.description, "No description available."),
     period: normalizeText(row.period, "N/A")
   };
+}
+
+function ensureAdminCrudModals() {
+  if (document.getElementById("tb-admin-trip-edit-modal")) return;
+  const maxBday = new Date().toISOString().slice(0, 10);
+  document.body.insertAdjacentHTML(
+    "beforeend",
+    `
+<div class="modal fade" id="tb-admin-trip-edit-modal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-lg modal-dialog-scrollable">
+    <div class="modal-content">
+      <form id="tb-admin-trip-edit-form">
+        <div class="modal-header">
+          <h2 class="modal-title h5 mb-0" id="tb-admin-trip-edit-title">Edit hike</h2>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <div class="modal-body">
+          <div id="tb-admin-trip-edit-message" class="alert d-none mb-3" role="alert"></div>
+          <input type="hidden" id="admin-trip-edit-id" name="tripId" value="" />
+          <div class="row g-3">
+            <div class="col-md-6"><label class="form-label" for="admin-trip-name">Trip name</label><input class="form-control" id="admin-trip-name" name="TripName" required /></div>
+            <div class="col-md-6"><label class="form-label" for="admin-trip-location">Location</label><input class="form-control" id="admin-trip-location" name="Location" required /></div>
+            <div class="col-md-6"><label class="form-label" for="admin-trip-distance">Distance</label><input class="form-control" id="admin-trip-distance" name="Distance" required /></div>
+            <div class="col-md-6"><label class="form-label" for="admin-trip-date">Date</label><input type="date" class="form-control" id="admin-trip-date" name="Date" required /></div>
+            <div class="col-md-6"><label class="form-label" for="admin-trip-price">Price</label><input type="number" min="0" step="0.01" class="form-control" id="admin-trip-price" name="Price" required /></div>
+            <div class="col-md-6"><label class="form-label" for="admin-trip-hikers">Max hikers</label><input type="number" min="1" class="form-control" id="admin-trip-hikers" name="NumberOfHikers" required /></div>
+            <div class="col-md-6"><label class="form-label" for="admin-trip-difficulty">Difficulty</label><input class="form-control" id="admin-trip-difficulty" name="DifficultyLevel" required /></div>
+            <div class="col-md-6"><label class="form-label" for="admin-trip-category">Category</label><input class="form-control" id="admin-trip-category" name="Category" required /></div>
+            <div class="col-md-6"><label class="form-label" for="admin-trip-time">Time</label><input type="time" class="form-control" id="admin-trip-time" name="Time" required /></div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+          <button type="submit" class="btn tb-btn-primary">Save changes</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+<div class="modal fade" id="tb-admin-customer-modal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-scrollable">
+    <div class="modal-content">
+      <form id="tb-admin-customer-form">
+        <div class="modal-header">
+          <h2 class="modal-title h5 mb-0" id="tb-admin-customer-title">Customer</h2>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <div class="modal-body">
+          <div id="tb-admin-customer-message" class="alert d-none mb-3" role="alert"></div>
+          <input type="hidden" id="admin-customer-id" name="customerId" value="" />
+          <div class="row g-3">
+            <div class="col-md-6"><label class="form-label" for="admin-customer-fname">First name</label><input class="form-control" id="admin-customer-fname" name="fname" required autocomplete="given-name" /></div>
+            <div class="col-md-6"><label class="form-label" for="admin-customer-lname">Last name</label><input class="form-control" id="admin-customer-lname" name="lname" required autocomplete="family-name" /></div>
+            <div class="col-12"><label class="form-label" for="admin-customer-email">Email</label><input type="email" class="form-control" id="admin-customer-email" name="email" required autocomplete="email" /></div>
+            <div class="col-12"><label class="form-label" for="admin-customer-birthday">Date of birth</label><input type="date" class="form-control" id="admin-customer-birthday" name="birthday" required min="1900-01-01" max="${maxBday}" /></div>
+            <div class="col-12"><label class="form-label" for="admin-customer-password">Password</label><input type="password" class="form-control" id="admin-customer-password" name="password" autocomplete="new-password" /><p class="small tb-muted mb-0" id="admin-customer-password-hint"></p></div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+          <button type="submit" class="btn tb-btn-primary">Save</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+`.trim()
+  );
 }
 
 async function loadData() {
@@ -827,23 +1022,35 @@ function reservationsSectionMarkup(forDashboard) {
 }
 
 function customersTableRowsMarkup() {
+  const adm = isAdmin();
+  const colspan = adm ? 6 : 5;
   if (dataStore.customers.length === 0) {
     return `
               <tr>
-                <td colspan="5" class="text-center tb-muted py-4">No customers yet.</td>
+                <td colspan="${colspan}" class="text-center tb-muted py-4">No customers yet.</td>
               </tr>`;
   }
   return dataStore.customers
-    .map(
-      (customer) => `
+    .map((customer) => {
+      const cid = coalesceNumericId(customer.id);
+      const idAttr = Number.isFinite(cid) && cid > 0 ? cid : "";
+      const actions =
+        adm && idAttr !== ""
+          ? `<td class="text-end text-nowrap">
+              <button type="button" class="btn btn-sm btn-outline-secondary me-1" data-admin-edit-customer="${idAttr}">Edit</button>
+              <button type="button" class="btn btn-sm btn-outline-danger" data-admin-del-customer="${idAttr}">Delete</button>
+            </td>`
+          : "";
+      return `
               <tr>
                 <td>${customer.id}</td>
                 <td>${escapeHtml(customer.name)}</td>
                 <td>${escapeHtml(customer.email)}</td>
                 <td>${escapeHtml(customer.phone)}</td>
                 <td>${escapeHtml(customer.city)}</td>
-              </tr>`
-    )
+                ${actions}
+              </tr>`;
+    })
     .join("");
 }
 
@@ -853,11 +1060,19 @@ function customersSectionMarkup(forDashboard) {
   const sectionOpen = forDashboard
     ? '<section id="dash-customers" class="tb-section tb-dashboard-anchor">'
     : '<section class="tb-section">';
+  const adm = isAdmin();
   return `
     ${sectionOpen}
       <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
         <${h} class="${hClass}">Customers</${h}>
-        <span class="tb-muted">${dataStore.customers.length} total</span>
+        <div class="d-flex align-items-center gap-2 flex-wrap">
+          <span class="tb-muted">${dataStore.customers.length} total</span>
+          ${
+            adm
+              ? `<button type="button" class="btn btn-sm tb-btn-primary" data-admin-add-customer="1">Add customer</button>`
+              : ""
+          }
+        </div>
       </div>
       <div class="table-responsive tb-table-wrap">
         <table class="table table-striped mb-0 align-middle">
@@ -868,6 +1083,7 @@ function customersSectionMarkup(forDashboard) {
               <th>Email</th>
               <th>Phone</th>
               <th>City</th>
+              ${adm ? `<th class="text-end">Actions</th>` : ""}
             </tr>
           </thead>
           <tbody>
@@ -931,26 +1147,21 @@ function employeesSectionMarkup(forDashboard) {
 }
 
 function reportsCardsMarkup() {
-  if (dataStore.reports.length === 0) {
-    return `
-          <div class="col-12">
-            <article class="card tb-card tb-report-card h-100">
-              <div class="card-body">
-                <h2 class="h5 card-title">No Reports Loaded</h2>
-                <p class="mb-0 tb-muted">Report placeholders will render from your sample data.</p>
-              </div>
-            </article>
-          </div>`;
-  }
-  return dataStore.reports
+  const cards = adminReportPlaceholderRows.map(normalizeReport);
+  return cards
     .map(
       (report) => `
           <div class="col-md-6 col-xl-4">
             <article class="card tb-card tb-report-card h-100">
-              <div class="card-body">
+              <div class="card-body d-flex flex-column">
                 <h2 class="h5 card-title">${escapeHtml(report.title)}</h2>
                 <p class="mb-2 tb-muted">${escapeHtml(report.description)}</p>
-                <span class="badge bg-secondary">${escapeHtml(report.period)}</span>
+                <span class="badge bg-secondary align-self-start">${escapeHtml(report.period)}</span>
+                <div class="mt-auto pt-3">
+                  <div class="rounded-2 border border-dashed bg-light text-center py-4 px-2 tb-muted small mb-0">
+                    Report data and charts will load here.
+                  </div>
+                </div>
               </div>
             </article>
           </div>`
@@ -1774,6 +1985,12 @@ function renderTripDetail() {
                 : ""
             }
             <button type="button" class="btn btn-outline-secondary btn-lg px-4" data-route-btn="trips">Browse More Trips</button>
+            ${
+              isAdmin()
+                ? `<button type="button" class="btn btn-outline-secondary btn-lg px-4" data-admin-edit-trip="${trip.id}">Edit hike</button>
+                  <button type="button" class="btn btn-outline-danger btn-lg px-4" data-admin-del-trip="${trip.id}">Delete hike</button>`
+                : ""
+            }
           </div>
         </div>
       </article>
@@ -2065,6 +2282,8 @@ function render() {
 
   appElement.innerHTML = state.route === "home" ? pageHtml : `${backButtonMarkup()}${pageHtml}`;
 
+  if (isAdmin()) ensureAdminCrudModals();
+
   updateNavbarForRole();
   updateActiveNav();
 
@@ -2253,6 +2472,141 @@ document.addEventListener("click", async (event) => {
     return;
   }
 
+  const adminEditTrip = event.target.closest("[data-admin-edit-trip]");
+  if (adminEditTrip && isAdmin()) {
+    event.preventDefault();
+    const tripId = Number(adminEditTrip.dataset.adminEditTrip);
+    const trip = dataStore.trips.find((t) => Number(t.id) === tripId);
+    if (!trip) return;
+    ensureAdminCrudModals();
+    const msg = document.getElementById("tb-admin-trip-edit-message");
+    if (msg) {
+      msg.className = "alert d-none mb-3";
+      msg.textContent = "";
+    }
+    const form = document.getElementById("tb-admin-trip-edit-form");
+    if (!form || !window.bootstrap?.Modal) return;
+    form.tripId.value = String(trip.id);
+    document.getElementById("admin-trip-name").value = trip.name || "";
+    document.getElementById("admin-trip-location").value = trip.location || "";
+    document.getElementById("admin-trip-distance").value =
+      trip.distanceInput && trip.distance !== "TBD" ? trip.distanceInput : trip.distance === "TBD" ? "" : trip.distance;
+    document.getElementById("admin-trip-date").value = trip.dateInput || normalizeDateForInput(trip.date);
+    document.getElementById("admin-trip-price").value = String(trip.price ?? "");
+    document.getElementById("admin-trip-hikers").value = String(trip.hikers ?? "");
+    document.getElementById("admin-trip-difficulty").value = trip.difficulty || "";
+    document.getElementById("admin-trip-category").value = trip.category || "";
+    document.getElementById("admin-trip-time").value = trip.timeInput || "";
+    window.bootstrap.Modal.getOrCreateInstance(document.getElementById("tb-admin-trip-edit-modal")).show();
+    return;
+  }
+
+  const adminDelTrip = event.target.closest("[data-admin-del-trip]");
+  if (adminDelTrip && isAdmin()) {
+    event.preventDefault();
+    const tripId = Number(adminDelTrip.dataset.adminDelTrip);
+    if (!Number.isFinite(tripId) || tripId <= 0) return;
+    const ok = await confirmDialog({
+      title: "Delete this hike?",
+      message: "This removes the trip and its reservations from the database."
+    });
+    if (!ok) return;
+    (async () => {
+      try {
+        await adminDeleteJson(`/api/admin/trips/${tripId}`);
+        state.flash = "Hike deleted.";
+        state.selectedTripId = dataStore.trips.find((t) => t.id !== tripId)?.id ?? null;
+        goToRoute("trips");
+        await loadData();
+      } catch (e) {
+        window.alert(e?.message || "Delete failed.");
+      }
+    })();
+    return;
+  }
+
+  const adminAddCustomer = event.target.closest("[data-admin-add-customer]");
+  if (adminAddCustomer && isAdmin()) {
+    event.preventDefault();
+    ensureAdminCrudModals();
+    const form = document.getElementById("tb-admin-customer-form");
+    const msg = document.getElementById("tb-admin-customer-message");
+    if (msg) {
+      msg.className = "alert d-none mb-3";
+      msg.textContent = "";
+    }
+    if (form) form.reset();
+    const idEl = document.getElementById("admin-customer-id");
+    if (idEl) idEl.value = "";
+    const pw = document.getElementById("admin-customer-password");
+    if (pw) {
+      pw.required = true;
+      pw.value = "";
+    }
+    const hint = document.getElementById("admin-customer-password-hint");
+    if (hint) hint.textContent = "Choose a login password for this customer.";
+    const title = document.getElementById("tb-admin-customer-title");
+    if (title) title.textContent = "Add customer";
+    if (window.bootstrap?.Modal) {
+      window.bootstrap.Modal.getOrCreateInstance(document.getElementById("tb-admin-customer-modal")).show();
+    }
+    return;
+  }
+
+  const adminEditCustomer = event.target.closest("[data-admin-edit-customer]");
+  if (adminEditCustomer && isAdmin()) {
+    event.preventDefault();
+    const cid = Number(adminEditCustomer.dataset.adminEditCustomer);
+    const c = dataStore.customers.find((row) => coalesceNumericId(row.id) === cid);
+    if (!c) return;
+    ensureAdminCrudModals();
+    const msg = document.getElementById("tb-admin-customer-message");
+    if (msg) {
+      msg.className = "alert d-none mb-3";
+      msg.textContent = "";
+    }
+    document.getElementById("admin-customer-id").value = String(cid);
+    document.getElementById("admin-customer-fname").value = c.fname || "";
+    document.getElementById("admin-customer-lname").value = c.lname || "";
+    document.getElementById("admin-customer-email").value = c.email !== "-" ? c.email : "";
+    document.getElementById("admin-customer-birthday").value = c.birthdayInput || "";
+    const pw = document.getElementById("admin-customer-password");
+    if (pw) {
+      pw.required = false;
+      pw.value = "";
+    }
+    const hint = document.getElementById("admin-customer-password-hint");
+    if (hint) hint.textContent = "Leave blank to keep the current password.";
+    const title = document.getElementById("tb-admin-customer-title");
+    if (title) title.textContent = "Edit customer";
+    if (window.bootstrap?.Modal) {
+      window.bootstrap.Modal.getOrCreateInstance(document.getElementById("tb-admin-customer-modal")).show();
+    }
+    return;
+  }
+
+  const adminDelCustomer = event.target.closest("[data-admin-del-customer]");
+  if (adminDelCustomer && isAdmin()) {
+    event.preventDefault();
+    const cid = Number(adminDelCustomer.dataset.adminDelCustomer);
+    if (!Number.isFinite(cid) || cid <= 0) return;
+    const ok = await confirmDialog({
+      title: "Delete customer?",
+      message: "This removes the customer and all of their reservations."
+    });
+    if (!ok) return;
+    (async () => {
+      try {
+        await adminDeleteJson(`/api/admin/customers/${cid}`);
+        state.flash = "Customer deleted.";
+        await loadData();
+      } catch (e) {
+        window.alert(e?.message || "Delete failed.");
+      }
+    })();
+    return;
+  }
+
   const cancelTarget = event.target.closest("[data-cancel-reservation]");
   if (cancelTarget) {
     event.preventDefault();
@@ -2291,6 +2645,86 @@ document.addEventListener("click", async (event) => {
 });
 
 document.addEventListener("submit", async (event) => {
+  const adminTripForm = event.target.closest("#tb-admin-trip-edit-form");
+  if (adminTripForm && isAdmin()) {
+    event.preventDefault();
+    const msg = document.getElementById("tb-admin-trip-edit-message");
+    if (msg) {
+      msg.className = "alert d-none mb-3";
+      msg.textContent = "";
+    }
+    const fd = new FormData(adminTripForm);
+    const tid = Number(fd.get("tripId"));
+    if (!Number.isFinite(tid) || tid <= 0) return;
+    const payload = {
+      TripName: String(fd.get("TripName") || "").trim(),
+      Location: String(fd.get("Location") || "").trim(),
+      Distance: String(fd.get("Distance") || "").trim(),
+      Date: String(fd.get("Date") || "").trim(),
+      Price: Number(fd.get("Price") || 0),
+      NumberOfHikers: Number(fd.get("NumberOfHikers") || 0),
+      DifficultyLevel: String(fd.get("DifficultyLevel") || "").trim(),
+      Category: String(fd.get("Category") || "").trim(),
+      Time: String(fd.get("Time") || "").trim()
+    };
+    try {
+      await adminPatchJson(`/api/admin/trips/${tid}`, payload);
+      const modalEl = document.getElementById("tb-admin-trip-edit-modal");
+      if (modalEl && window.bootstrap?.Modal) window.bootstrap.Modal.getOrCreateInstance(modalEl).hide();
+      state.flash = "Hike updated.";
+      await loadData();
+    } catch (err) {
+      if (msg) {
+        msg.className = "alert alert-danger mb-3";
+        msg.textContent = err?.message || "Save failed.";
+        msg.classList.remove("d-none");
+      }
+    }
+    return;
+  }
+
+  const adminCustomerForm = event.target.closest("#tb-admin-customer-form");
+  if (adminCustomerForm && isAdmin()) {
+    event.preventDefault();
+    const msg = document.getElementById("tb-admin-customer-message");
+    if (msg) {
+      msg.className = "alert d-none mb-3";
+      msg.textContent = "";
+    }
+    const fd = new FormData(adminCustomerForm);
+    const idStr = String(fd.get("customerId") || "").trim();
+    const fname = String(fd.get("fname") || "").trim();
+    const lname = String(fd.get("lname") || "").trim();
+    const email = String(fd.get("email") || "").trim();
+    const birthday = String(fd.get("birthday") || "").trim();
+    const password = String(fd.get("password") || "").trim();
+    try {
+      if (!idStr) {
+        if (!password) throw new Error("Password is required for new customers.");
+        await adminPostJson("/api/admin/customers", { Fname: fname, Lname: lname, Email: email, Password: password, Birthday: birthday });
+      } else {
+        await adminPatchJson(`/api/admin/customers/${Number(idStr)}`, {
+          Fname: fname,
+          Lname: lname,
+          Email: email,
+          Birthday: birthday,
+          Password: password || null
+        });
+      }
+      const modalEl = document.getElementById("tb-admin-customer-modal");
+      if (modalEl && window.bootstrap?.Modal) window.bootstrap.Modal.getOrCreateInstance(modalEl).hide();
+      state.flash = idStr ? "Customer updated." : "Customer created.";
+      await loadData();
+    } catch (err) {
+      if (msg) {
+        msg.className = "alert alert-danger mb-3";
+        msg.textContent = err?.message || "Save failed.";
+        msg.classList.remove("d-none");
+      }
+    }
+    return;
+  }
+
   const profileForm = event.target.closest("#profile-form");
   if (profileForm) {
     event.preventDefault();
