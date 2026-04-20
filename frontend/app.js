@@ -1077,7 +1077,7 @@ function renderAuthCard() {
           </div>
           <h1 class="tb-auth-title display-6 mb-2">${isLogin ? "Welcome back." : "Join the trail."}</h1>
           <p class="tb-auth-subtitle mb-0">
-            ${isLogin ? "Log in to manage trips and reservations." : "Create an account to start booking guided hikes."}
+            ${isLogin ? "Log in with your email — your dashboard matches the account you registered." : "Create an account to start booking guided hikes."}
           </p>
         </div>
 
@@ -1086,7 +1086,7 @@ function renderAuthCard() {
             <div class="d-flex justify-content-between align-items-start gap-3 mb-3">
               <div>
                 <h2 class="h4 mb-1">${isLogin ? "Login" : "Create account"}</h2>
-                <p class="tb-muted mb-0">${isLogin ? "Use your email + password." : "Takes about 20 seconds."}</p>
+                <p class="tb-muted mb-0">${isLogin ? "Email and password only." : "Takes about 20 seconds."}</p>
               </div>
               <span class="badge text-dark" style="background: rgba(140, 109, 79, 0.22); border: 1px solid rgba(140, 109, 79, 0.32);">
                 ${isLogin ? "Returning user" : "New explorer"}
@@ -1097,23 +1097,8 @@ function renderAuthCard() {
 
             <form id="${isLogin ? "login-form" : "register-form"}" class="d-grid gap-3">
               ${
-                isLogin
+                !isLogin
                   ? `
-                <div>
-                  <label class="form-label" for="login-role">Login as</label>
-                  <div class="btn-group w-100" role="group" aria-label="Login role">
-                    <input type="radio" class="btn-check" name="role" id="login-role-hiker" value="hiker" autocomplete="off" checked required>
-                    <label class="btn btn-outline-secondary" for="login-role-hiker">Hiker</label>
-
-                    <input type="radio" class="btn-check" name="role" id="login-role-employee" value="employee" autocomplete="off">
-                    <label class="btn btn-outline-secondary" for="login-role-employee">Employee</label>
-
-                    <input type="radio" class="btn-check" name="role" id="login-role-admin" value="admin" autocomplete="off">
-                    <label class="btn btn-outline-secondary" for="login-role-admin">Admin</label>
-                  </div>
-                </div>
-              `
-                  : `
                 <div class="row g-3">
                   <div class="col-12 col-sm-6">
                     <label class="form-label" for="register-fname">First name</label>
@@ -1146,6 +1131,7 @@ function renderAuthCard() {
                   </select>
                 </div>
               `
+                  : ""
               }
 
               <div>
@@ -2307,7 +2293,6 @@ document.addEventListener("submit", async (event) => {
     const messageElement = document.querySelector("#auth-message");
     const formData = new FormData(loginForm);
     const payload = {
-      role: String(formData.get("role") || "hiker").trim().toLowerCase(),
       email: String(formData.get("email") || "").trim(),
       password: String(formData.get("password") || "")
     };
