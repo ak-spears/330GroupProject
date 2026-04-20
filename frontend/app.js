@@ -369,6 +369,24 @@ async function patchJson(endpoint, payload) {
   return body;
 }
 
+async function deleteJson(endpoint) {
+  const response = await fetch(apiUrl(endpoint), { method: "DELETE" });
+
+  let body = null;
+  try {
+    body = await response.json();
+  } catch {
+    body = null;
+  }
+
+  if (!response.ok) {
+    const message = body?.message || `${endpoint} failed (${response.status})`;
+    throw new Error(message);
+  }
+
+  return body;
+}
+
 function ensureConfirmModal() {
   if (document.querySelector("#tb-confirm-modal")) return;
   const wrapper = document.createElement("div");
@@ -1400,7 +1418,9 @@ function renderTrips() {
                     isHiker
                       ? `<button class="btn btn-sm tb-btn-primary flex-grow-1" data-trip-book="${trip.id}">Book Now</button>`
                       : isEmployee
-                        ? `<button class="btn btn-sm tb-btn-primary flex-grow-1" data-trip-lead="${trip.id}">Guide</button>`
+                        ? leadingIds.has(Number(trip.id))
+                          ? `<button class="btn btn-sm btn-outline-danger flex-grow-1" data-trip-cancel-lead="${trip.id}">Cancel Guide</button>`
+                          : `<button class="btn btn-sm tb-btn-primary flex-grow-1" data-trip-lead="${trip.id}">Guide</button>`
                         : ""
                   }
                   <button class="btn btn-sm btn-outline-secondary flex-grow-1" data-trip-detail="${trip.id}">View</button>
@@ -2219,6 +2239,29 @@ document.addEventListener("click", async (event) => {
         await loadData();
       } catch (e) {
         window.alert(e?.message || "Could not lead this hike.");
+      }
+    })();
+    return;
+  }
+
+  const cancelLeadTarget = event.target.closest("[data-trip-cancel-lead]");
+  if (cancelLeadTarget) {
+    event.preventDefault();
+    const tripId = Number(cancelLeadTarget.dataset.tripCancelLead);
+    const employeeId = Number(currentUser?.id);
+    if (!Number.isFinite(tripId) || tripId <= 0 || !Number.isFinite(employeeId) || employeeId <= 0) return;
+    const ok = await confirmDialog({
+      title: "Cancel guiding?",
+      message: "Are you sure you want to stop guiding this hike?"
+    });
+    if (!ok) return;
+    (async () => {
+      try {
+        await deleteJson(`/api/trips/${tripId}/leaders/${employeeId}`);
+        state.flash = "You are no longer guiding this hike.";
+        await loadData();
+      } catch (e) {
+        window.alert(e?.message || "Could not cancel guiding.");
       }
     })();
     return;

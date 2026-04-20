@@ -287,6 +287,32 @@ public sealed class DataController : ControllerBase
         }
     }
 
+    [HttpDelete("trips/{tripId:int}/leaders/{employeeId:int}")]
+    public async Task<IActionResult> CancelLeadTrip([FromRoute] int tripId, [FromRoute] int employeeId, CancellationToken cancellationToken)
+    {
+        if (tripId <= 0 || employeeId <= 0)
+            return BadRequest(new { error = "invalid_request" });
+
+        try
+        {
+            await using var connection = _connectionFactory.CreateConnection();
+            await connection.OpenAsync(cancellationToken);
+
+            const string deleteSql = "DELETE FROM supervises WHERE employeeid = @employeeId AND tripid = @tripId;";
+
+            await using var cmd = new MySqlCommand(deleteSql, connection);
+            cmd.Parameters.AddWithValue("@employeeId", employeeId);
+            cmd.Parameters.AddWithValue("@tripId", tripId);
+            await cmd.ExecuteNonQueryAsync(cancellationToken);
+
+            return Ok(new { employeeId, tripId, status = "Cancelled" });
+        }
+        catch (MySqlException ex)
+        {
+            return DatabaseUnavailable(ex);
+        }
+    }
+
     [HttpGet("employees/{employeeId:int}/guided-trips")]
     public async Task<IActionResult> GetGuidedTrips([FromRoute] int employeeId, CancellationToken cancellationToken)
     {
