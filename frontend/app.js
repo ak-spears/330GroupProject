@@ -57,44 +57,48 @@ const fallbackSampleData = {
     { id: "E-302", name: "Mason Bell", role: "Coordinator", department: "Operations", email: "mason@trailbuddy.com" },
     { id: "E-303", name: "Elena Ford", role: "Support", department: "Customer Service", email: "elena@trailbuddy.com" }
   ],
-  reports: [
-    {
-      title: "View monthly revenue trends",
-      description: "Line or bar chart of recognized revenue by month.",
-      period: "Placeholder"
-    },
-    {
-      title: "View top customers by spending",
-      description: "Ranked customers by total reservation spend.",
-      period: "Placeholder"
-    },
-    {
-      title: "View top selling trip categories by revenue",
-      description: "Trip categories aggregated by booked revenue.",
-      period: "Placeholder"
-    },
-    {
-      title: "View trips by difficulty level",
-      description: "Trip counts or share by easy, moderate, and hard.",
-      period: "Placeholder"
-    },
-    {
-      title: "View reservation status breakdown",
-      description: "Pending, confirmed, cancelled, and other statuses.",
-      period: "Placeholder"
-    }
-  ]
 };
 
-/** Admin Reports page: static cards until wired to analytics/export. */
-const adminReportPlaceholderRows = fallbackSampleData.reports;
+/** Admin Reports page: card titles + copy (data from /api/reports or client-side fallback). */
+const adminReportCardMeta = [
+  {
+    key: "monthlyRevenue",
+    tabLabel: "Monthly revenue",
+    title: "View monthly revenue trends",
+    description: "Sum of trip price × party size by reservation month (excludes cancelled)."
+  },
+  {
+    key: "topCustomers",
+    tabLabel: "Top customers",
+    title: "View top customers by spending",
+    description: "Customers ranked by total booking value on non-cancelled reservations."
+  },
+  {
+    key: "categoryRevenue",
+    tabLabel: "Trip categories",
+    title: "View top selling trip categories by revenue",
+    description: "Trip category from the hike, weighted by booking value."
+  },
+  {
+    key: "tripsByDifficulty",
+    tabLabel: "By difficulty",
+    title: "View trips by difficulty level",
+    description: "Trips offered per difficulty and seats booked (non-cancelled) on those trips."
+  },
+  {
+    key: "reservationStatus",
+    tabLabel: "Reservation status",
+    title: "View reservation status breakdown",
+    description: "Count of reservations in each status."
+  }
+];
 
 const dataStore = {
   trips: [],
   reservations: [],
   customers: [],
   employees: [],
-  reports: [],
+  reportAnalytics: null,
   guidedTrips: []
 };
 
@@ -112,7 +116,9 @@ const state = {
   /** Trip leaders cache: tripId -> { status, error, leaders[] } */
   tripLeaders: {},
   /** When true, after routing to Trips auto-open the Add Trip modal. */
-  openAddTripModal: false
+  openAddTripModal: false,
+  /** Admin Reports: which `adminReportCardMeta.key` is shown. */
+  reportTab: adminReportCardMeta[0].key
 };
 
 /** Previous { route, selectedTripId } snapshots for Back (not browser history). */
@@ -751,12 +757,335 @@ function normalizeEmployee(row) {
   };
 }
 
-function normalizeReport(row) {
+function emptyReportAnalytics() {
   return {
-    title: normalizeText(row.title, "Untitled Report"),
-    description: normalizeText(row.description, "No description available."),
-    period: normalizeText(row.period, "N/A")
+    monthlyRevenue: [],
+    topCustomers: [],
+    categoryRevenue: [],
+    tripsByDifficulty: [],
+    reservationStatus: []
   };
+}
+
+function numOr0(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function pickReportCount(row) {
+  if (!row || typeof row !== "object") return 0;
+  const v = row.count ?? row.Count ?? row["count"] ?? row["Count"] ?? row.cnt ?? row.Cnt;
+  return Math.round(numOr0(v));
+}
+
+function normalizeReportAnalytics(raw) {
+  const out = emptyReportAnalytics();
+  if (!raw || typeof raw !== "object") return out;
+  /** Old API or mis-route: JSON array instead of analytics object. */
+  if (Array.isArray(raw)) return out;
+
+  out.monthlyRevenue = (raw.monthlyRevenue || raw.MonthlyRevenue || [])
+    .filter(Boolean)
+    .map((row) => ({
+      month: normalizeText(row.month ?? row.monthKey ?? row.Month ?? row.ym, ""),
+      revenue: numOr0(row.revenue ?? row.Revenue)
+    }))
+    .filter((r) => r.month && r.month.length >= 7);
+
+  out.topCustomers = (raw.topCustomers || raw.TopCustomers || [])
+    .filter(Boolean)
+    .map((row) => ({
+      customerId: numOr0(row.customerId ?? row.CustomerId),
+      name: normalizeText(row.name ?? row.Name, ""),
+      totalSpend: numOr0(row.totalSpend ?? row.TotalSpend),
+      reservationCount: Math.round(numOr0(row.reservationCount ?? row.ReservationCount))
+    }));
+
+  out.categoryRevenue = (raw.categoryRevenue || raw.CategoryRevenue || [])
+    .filter(Boolean)
+    .map((row) => ({
+      category: normalizeText(row.category ?? row.Category, "(Uncategorized)"),
+      revenue: numOr0(row.revenue ?? row.Revenue)
+    }));
+
+  out.tripsByDifficulty = (raw.tripsByDifficulty || raw.TripsByDifficulty || [])
+    .filter(Boolean)
+    .map((row) => ({
+      difficulty: normalizeText(row.difficulty ?? row.Difficulty, "(Unknown)"),
+      tripCount: Math.round(numOr0(row.tripCount ?? row.TripCount)),
+      bookedSeats: numOr0(row.bookedSeats ?? row.BookedSeats)
+    }));
+
+  out.reservationStatus = (raw.reservationStatus || raw.ReservationStatus || [])
+    .filter(Boolean)
+    .map((row) => ({
+      status: normalizeText(row.status ?? row.Status, "(Unknown)"),
+      count: pickReportCount(row)
+    }));
+
+  return out;
+}
+
+/** Prefer whichever source has more rows per section (handles empty API + live client data). */
+function mergeReportAnalyticsSections(server, local) {
+  const s = server && typeof server === "object" && !Array.isArray(server) ? server : emptyReportAnalytics();
+  const l = local && typeof local === "object" ? local : emptyReportAnalytics();
+  const pick = (a, b) => {
+    const x = Array.isArray(a) ? a : [];
+    const y = Array.isArray(b) ? b : [];
+    return x.length >= y.length ? x : y;
+  };
+  return {
+    monthlyRevenue: pick(s.monthlyRevenue, l.monthlyRevenue),
+    topCustomers: pick(s.topCustomers, l.topCustomers),
+    categoryRevenue: pick(s.categoryRevenue, l.categoryRevenue),
+    tripsByDifficulty: pick(s.tripsByDifficulty, l.tripsByDifficulty),
+    reservationStatus: pick(s.reservationStatus, l.reservationStatus)
+  };
+}
+
+function reservationCancelledForReport(st) {
+  const s = String(st || "").trim().toLowerCase();
+  return s === "cancelled" || s === "canceled" || s.startsWith("cancel");
+}
+
+function yearMonthFromReservationRow(r) {
+  const raw = r.date ?? r.reservationDate ?? r.bookingDate;
+  const s = normalizeText(raw, "").trim();
+  const m = s.match(/(\d{4})-(\d{2})/);
+  return m ? `${m[1]}-${m[2]}` : "";
+}
+
+/** When /api/reports fails, derive the same metrics from already-loaded trips + reservations. */
+function buildReportAnalyticsFromStores() {
+  const trips = dataStore.trips || [];
+  const reservations = dataStore.reservations || [];
+  const tripById = new Map();
+  for (const t of trips) {
+    const n = Number(t.id);
+    if (Number.isFinite(n)) {
+      tripById.set(n, t);
+      tripById.set(String(n), t);
+    }
+  }
+  const tripByName = new Map(trips.map((t) => [String(t.name || "").trim().toLowerCase(), t]));
+  const active = reservations.filter((r) => !reservationCancelledForReport(r.status));
+
+  function tripForReservation(r) {
+    const tid = r.tripId;
+    let t = tid != null ? tripById.get(tid) ?? tripById.get(Number(tid)) ?? tripById.get(String(tid)) : null;
+    if (!t && r.trip) t = tripByName.get(String(r.trip).trim().toLowerCase()) || null;
+    return t;
+  }
+
+  const monthTotals = new Map();
+  for (const r of active) {
+    const t = tripForReservation(r);
+    if (!t) continue;
+    const rev = numOr0(t.price) * numOr0(r.seats);
+    const ym = yearMonthFromReservationRow(r);
+    if (ym.length !== 7) continue;
+    monthTotals.set(ym, (monthTotals.get(ym) || 0) + rev);
+  }
+  const monthlyRevenue = [...monthTotals.entries()]
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([month, revenue]) => ({ month, revenue }));
+
+  const custMap = new Map();
+  for (const r of active) {
+    const t = tripForReservation(r);
+    if (!t) continue;
+    const rev = numOr0(t.price) * numOr0(r.seats);
+    const idNum = r.customerId != null ? Number(r.customerId) : NaN;
+    const key = Number.isFinite(idNum) ? `id:${idNum}` : `name:${String(r.customer || "").trim().toLowerCase()}`;
+    if (key === "name:") continue;
+    const o = custMap.get(key) || { totalSpend: 0, reservationCount: 0, displayName: "" };
+    o.totalSpend += rev;
+    o.reservationCount += 1;
+    if (!o.displayName && r.customer) o.displayName = String(r.customer).trim();
+    custMap.set(key, o);
+  }
+  const customerById = new Map((dataStore.customers || []).map((c) => [Number(c.id), c.name]));
+  const topCustomers = [...custMap.entries()]
+    .sort((a, b) => b[1].totalSpend - a[1].totalSpend)
+    .slice(0, 15)
+    .map(([key, o]) => {
+      const customerId = key.startsWith("id:") ? Number(key.slice(3)) : 0;
+      const displayName =
+        o.displayName ||
+        (Number.isFinite(customerId) && customerId > 0
+          ? customerById.get(customerId) || `Customer #${customerId}`
+          : "Customer");
+      return {
+        customerId,
+        name: displayName,
+        totalSpend: o.totalSpend,
+        reservationCount: o.reservationCount
+      };
+    });
+
+  const catTotals = new Map();
+  for (const r of active) {
+    const t = tripForReservation(r);
+    if (!t) continue;
+    const rev = numOr0(t.price) * numOr0(r.seats);
+    const cat = t.category && String(t.category).trim() ? t.category : "(Uncategorized)";
+    catTotals.set(cat, (catTotals.get(cat) || 0) + rev);
+  }
+  const categoryRevenue = [...catTotals.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .map(([category, revenue]) => ({ category, revenue }));
+
+  const diffTrips = new Map();
+  const diffSeats = new Map();
+  for (const t of trips) {
+    const d = t.difficulty && String(t.difficulty).trim() ? t.difficulty : "(Unknown)";
+    diffTrips.set(d, (diffTrips.get(d) || 0) + 1);
+  }
+  for (const r of active) {
+    const t = tripForReservation(r);
+    if (!t) continue;
+    const d = t.difficulty && String(t.difficulty).trim() ? t.difficulty : "(Unknown)";
+    diffSeats.set(d, (diffSeats.get(d) || 0) + numOr0(r.seats));
+  }
+  const allDiff = new Set([...diffTrips.keys(), ...diffSeats.keys()]);
+  const tripsByDifficulty = [...allDiff]
+    .map((difficulty) => ({
+      difficulty,
+      tripCount: diffTrips.get(difficulty) || 0,
+      bookedSeats: diffSeats.get(difficulty) || 0
+    }))
+    .sort((a, b) => b.tripCount - a.tripCount || String(a.difficulty).localeCompare(String(b.difficulty)));
+
+  const stMap = new Map();
+  for (const r of reservations) {
+    const s = r.status && String(r.status).trim() ? r.status : "(Unknown)";
+    stMap.set(s, (stMap.get(s) || 0) + 1);
+  }
+  const reservationStatus = [...stMap.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .map(([status, count]) => ({ status, count }));
+
+  return {
+    monthlyRevenue,
+    topCustomers,
+    categoryRevenue,
+    tripsByDifficulty,
+    reservationStatus
+  };
+}
+
+function formatReportCurrency(n) {
+  const x = Number(n);
+  if (!Number.isFinite(x)) return "—";
+  return x.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 2 });
+}
+
+function reportProgressBar(pct) {
+  const w = Math.min(100, Math.max(0, pct));
+  return `<div class="progress flex-grow-1" style="height:10px" role="img" aria-label="Relative scale">
+    <div class="progress-bar tb-report-progress" style="width:${w}%"></div>
+  </div>`;
+}
+
+function reportBodyForKey(key, analytics) {
+  const a = analytics || emptyReportAnalytics();
+  if (key === "monthlyRevenue") {
+    const rows = a.monthlyRevenue;
+    const max = Math.max(1, ...rows.map((r) => numOr0(r.revenue)));
+    if (!rows.length) return `<p class="tb-muted small mb-0">No non-cancelled bookings with dates in range.</p>`;
+    return `<div class="table-responsive"><table class="table table-sm table-striped mb-0 align-middle">
+      <thead><tr><th>Month</th><th class="text-end">Booking value</th><th class="w-50 d-none d-md-table-cell">Scale</th></tr></thead>
+      <tbody>${rows
+        .map((r) => {
+          const pct = (numOr0(r.revenue) / max) * 100;
+          return `<tr>
+            <td class="text-nowrap">${escapeHtml(r.month)}</td>
+            <td class="text-end text-nowrap">${escapeHtml(formatReportCurrency(r.revenue))}</td>
+            <td class="d-none d-md-table-cell">${reportProgressBar(pct)}</td>
+          </tr>`;
+        })
+        .join("")}
+      </tbody></table></div>`;
+  }
+  if (key === "topCustomers") {
+    const rows = a.topCustomers;
+    const max = Math.max(1, ...rows.map((r) => numOr0(r.totalSpend)));
+    if (!rows.length) return `<p class="tb-muted small mb-0">No customer spend data yet.</p>`;
+    return `<div class="table-responsive"><table class="table table-sm table-striped mb-0 align-middle">
+      <thead><tr><th>Customer</th><th class="text-end">Total spend</th><th class="text-end">Reservations</th><th class="w-25 d-none d-lg-table-cell"></th></tr></thead>
+      <tbody>${rows
+        .map((r) => {
+          const pct = (numOr0(r.totalSpend) / max) * 100;
+          return `<tr>
+            <td>${escapeHtml(r.name)}${
+              r.customerId > 0 ? ` <span class="tb-muted small">#${r.customerId}</span>` : ""
+            }</td>
+            <td class="text-end text-nowrap">${escapeHtml(formatReportCurrency(r.totalSpend))}</td>
+            <td class="text-end">${r.reservationCount}</td>
+            <td class="d-none d-lg-table-cell">${reportProgressBar(pct)}</td>
+          </tr>`;
+        })
+        .join("")}
+      </tbody></table></div>`;
+  }
+  if (key === "categoryRevenue") {
+    const rows = a.categoryRevenue;
+    const max = Math.max(1, ...rows.map((r) => numOr0(r.revenue)));
+    if (!rows.length) return `<p class="tb-muted small mb-0">No category revenue yet.</p>`;
+    return `<div class="table-responsive"><table class="table table-sm table-striped mb-0 align-middle">
+      <thead><tr><th>Category</th><th class="text-end">Revenue</th><th class="w-50 d-none d-md-table-cell"></th></tr></thead>
+      <tbody>${rows
+        .map((r) => {
+          const pct = (numOr0(r.revenue) / max) * 100;
+          return `<tr>
+            <td>${escapeHtml(r.category)}</td>
+            <td class="text-end text-nowrap">${escapeHtml(formatReportCurrency(r.revenue))}</td>
+            <td class="d-none d-md-table-cell">${reportProgressBar(pct)}</td>
+          </tr>`;
+        })
+        .join("")}
+      </tbody></table></div>`;
+  }
+  if (key === "tripsByDifficulty") {
+    const rows = a.tripsByDifficulty;
+    if (!rows.length) return `<p class="tb-muted small mb-0">No trips in catalog.</p>`;
+    const maxTrips = Math.max(1, ...rows.map((r) => numOr0(r.tripCount)));
+    const maxSeats = Math.max(1, ...rows.map((r) => numOr0(r.bookedSeats)));
+    return `<div class="table-responsive"><table class="table table-sm table-striped mb-0 align-middle">
+      <thead><tr><th>Difficulty</th><th class="text-end">Trips</th><th class="text-end">Booked seats</th><th class="d-none d-md-table-cell w-25">Trips</th><th class="d-none d-md-table-cell w-25">Seats</th></tr></thead>
+      <tbody>${rows
+        .map(
+          (r) => `<tr>
+          <td>${escapeHtml(r.difficulty)}</td>
+          <td class="text-end">${r.tripCount}</td>
+          <td class="text-end">${Math.round(numOr0(r.bookedSeats))}</td>
+          <td class="d-none d-md-table-cell">${reportProgressBar((numOr0(r.tripCount) / maxTrips) * 100)}</td>
+          <td class="d-none d-md-table-cell">${reportProgressBar((numOr0(r.bookedSeats) / maxSeats) * 100)}</td>
+        </tr>`
+        )
+        .join("")}
+      </tbody></table></div>`;
+  }
+  if (key === "reservationStatus") {
+    const rows = a.reservationStatus;
+    const max = Math.max(1, ...rows.map((r) => numOr0(r.count)));
+    if (!rows.length) return `<p class="tb-muted small mb-0">No reservations.</p>`;
+    return `<div class="table-responsive"><table class="table table-sm table-striped mb-0 align-middle">
+      <thead><tr><th>Status</th><th class="text-end">Count</th><th class="w-50 d-none d-md-table-cell"></th></tr></thead>
+      <tbody>${rows
+        .map((r) => {
+          const pct = (numOr0(r.count) / max) * 100;
+          return `<tr>
+            <td>${escapeHtml(r.status)}</td>
+            <td class="text-end">${r.count}</td>
+            <td class="d-none d-md-table-cell">${reportProgressBar(pct)}</td>
+          </tr>`;
+        })
+        .join("")}
+      </tbody></table></div>`;
+  }
+  return `<p class="tb-muted small mb-0">Unknown report.</p>`;
 }
 
 function ensureAdminCrudModals() {
@@ -859,7 +1188,6 @@ async function loadData() {
     const trips = await fetchJson("/api/trips");
     const reservations = await fetchJson("/api/reservations");
     const employees = await fetchJson("/api/employees");
-    const reports = await fetchJson("/api/reports");
 
     let customers;
     let guidedTrips;
@@ -880,7 +1208,15 @@ async function loadData() {
       dataStore.customers
     );
     dataStore.employees = (Array.isArray(employees) ? employees : []).map(normalizeEmployee);
-    dataStore.reports = (Array.isArray(reports) ? reports : []).map(normalizeReport);
+    dataStore.reportAnalytics = null;
+    if (currentUser?.role === "admin") {
+      try {
+        dataStore.reportAnalytics = normalizeReportAnalytics(await fetchJson("/api/reports"));
+      } catch (reportErr) {
+        console.warn("Report analytics:", reportErr);
+        dataStore.reportAnalytics = buildReportAnalyticsFromStores();
+      }
+    }
     state.selectedTripId = dataStore.trips[0]?.id ?? null;
   } catch (error) {
     console.error("Failed to load API data:", error);
@@ -892,7 +1228,10 @@ async function loadData() {
       dataStore.customers
     );
     dataStore.employees = fallbackSampleData.employees.map(normalizeEmployee);
-    dataStore.reports = fallbackSampleData.reports.map(normalizeReport);
+    dataStore.reportAnalytics = null;
+    if (currentUser?.role === "admin") {
+      dataStore.reportAnalytics = buildReportAnalyticsFromStores();
+    }
     state.selectedTripId = dataStore.trips[0]?.id ?? null;
   } finally {
     render();
@@ -1146,27 +1485,42 @@ function employeesSectionMarkup(forDashboard) {
     </section>`;
 }
 
-function reportsCardsMarkup() {
-  const cards = adminReportPlaceholderRows.map(normalizeReport);
-  return cards
-    .map(
-      (report) => `
-          <div class="col-md-6 col-xl-4">
-            <article class="card tb-card tb-report-card h-100">
-              <div class="card-body d-flex flex-column">
-                <h2 class="h5 card-title">${escapeHtml(report.title)}</h2>
-                <p class="mb-2 tb-muted">${escapeHtml(report.description)}</p>
-                <span class="badge bg-secondary align-self-start">${escapeHtml(report.period)}</span>
-                <div class="mt-auto pt-3">
-                  <div class="rounded-2 border border-dashed bg-light text-center py-4 px-2 tb-muted small mb-0">
-                    Report data and charts will load here.
-                  </div>
-                </div>
-              </div>
-            </article>
-          </div>`
-    )
-    .join("");
+function getReportTabKey() {
+  const k = state.reportTab;
+  return adminReportCardMeta.some((m) => m.key === k) ? k : adminReportCardMeta[0].key;
+}
+
+function reportsTabBarMarkup() {
+  const active = getReportTabKey();
+  return `<div class="d-flex flex-wrap gap-2 mb-3" role="tablist" aria-label="Report type">
+    ${adminReportCardMeta
+      .map((meta) => {
+        const isActive = meta.key === active;
+        return `<button type="button" role="tab" aria-selected="${isActive ? "true" : "false"}" class="btn btn-sm ${
+          isActive ? "tb-btn-primary" : "btn-outline-secondary"
+        }" data-report-tab="${escapeHtml(meta.key)}">${escapeHtml(meta.tabLabel)}</button>`;
+      })
+      .join("")}
+  </div>`;
+}
+
+function reportsSingleCardMarkup() {
+  const analytics = isAdmin()
+    ? mergeReportAnalyticsSections(dataStore.reportAnalytics, buildReportAnalyticsFromStores())
+    : emptyReportAnalytics();
+  const key = getReportTabKey();
+  const meta = adminReportCardMeta.find((m) => m.key === key) || adminReportCardMeta[0];
+  const body = reportBodyForKey(meta.key, analytics);
+  return `
+      <div class="col-12">
+        <article class="card tb-card tb-report-card h-100">
+          <div class="card-body d-flex flex-column">
+            <h2 class="h5 card-title">${escapeHtml(meta.title)}</h2>
+            <p class="mb-3 tb-muted small">${escapeHtml(meta.description)}</p>
+            <div class="mt-auto">${body}</div>
+          </div>
+        </article>
+      </div>`;
 }
 
 function reportsSectionMarkup(forDashboard) {
@@ -1178,8 +1532,9 @@ function reportsSectionMarkup(forDashboard) {
   return `
     ${sectionOpen}
       <${h} class="${hClass}">Reports</${h}>
+      ${reportsTabBarMarkup()}
       <div class="row g-3">
-        ${reportsCardsMarkup()}
+        ${reportsSingleCardMarkup()}
       </div>
     </section>`;
 }
@@ -2302,6 +2657,9 @@ function goToRoute(route) {
     state.profile = { status: "idle", error: null, data: null };
     state.profileNotice = null;
   }
+  if (target === "reports" && !adminReportCardMeta.some((m) => m.key === state.reportTab)) {
+    state.reportTab = adminReportCardMeta[0].key;
+  }
   if (target === state.route) {
     state.route = target;
     render();
@@ -2317,6 +2675,16 @@ document.addEventListener("click", async (event) => {
   if (backTarget) {
     event.preventDefault();
     goBack();
+    return;
+  }
+
+  const reportTabBtn = event.target.closest("[data-report-tab]");
+  if (reportTabBtn) {
+    event.preventDefault();
+    const key = reportTabBtn.dataset.reportTab;
+    if (!key || !adminReportCardMeta.some((m) => m.key === key)) return;
+    state.reportTab = key;
+    render();
     return;
   }
 

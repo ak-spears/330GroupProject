@@ -513,6 +513,10 @@ body.tb-trip-detail-bg::after {
   border-left: 6px solid var(--tb-earth-500);
 }
 
+.tb-report-progress {
+  background-color: var(--tb-earth-500);
+}
+
 @media (max-width: 991px) {
   #app {
     padding-top: 5.5rem;

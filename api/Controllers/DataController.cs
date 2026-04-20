@@ -477,17 +477,172 @@ public sealed class DataController : ControllerBase
             },
             cancellationToken);
 
+    /// <summary>
+    /// Admin analytics: aggregates from <c>reservation</c>, <c>hikingtrip</c>, and <c>customer</c>.
+    /// Booking value = trip price × party size; excludes cancelled reservations.
+    /// </summary>
     [HttpGet("reports")]
-    public Task<IActionResult> GetReports(CancellationToken cancellationToken) =>
-        QueryListOrDatabaseUnavailableAsync(
-            ["reports", "report"],
-            new Dictionary<string, string[]>
+    public async Task<IActionResult> GetReports(CancellationToken cancellationToken)
+    {
+        const string notCancelled = """
+            LOWER(TRIM(COALESCE(r.resstatus, ''))) NOT IN ('cancelled', 'canceled')
+            """;
+
+        try
+        {
+            await using var connection = _connectionFactory.CreateConnection();
+            await connection.OpenAsync(cancellationToken);
+
+            var monthlyRevenue = new List<Dictionary<string, object?>>();
+            const string monthlySql = $"""
+                SELECT DATE_FORMAT(COALESCE(r.reservationdate, h.date), '%Y-%m') AS monthKey,
+                       SUM(h.price * r.numberofhikers) AS revenue
+                FROM reservation r
+                INNER JOIN hikingtrip h ON h.tripid = r.tripid
+                WHERE {notCancelled}
+                GROUP BY DATE_FORMAT(COALESCE(r.reservationdate, h.date), '%Y-%m')
+                ORDER BY monthKey ASC
+                LIMIT 36;
+                """;
+            await using (var cmd = new MySqlCommand(monthlySql, connection))
+            await using (var reader = await cmd.ExecuteReaderAsync(cancellationToken))
             {
-                ["title"] = ["title", "report_name", "name"],
-                ["description"] = ["description", "details", "summary"],
-                ["period"] = ["period", "time_period", "range_label"]
-            },
-            cancellationToken);
+                while (await reader.ReadAsync(cancellationToken))
+                {
+                    monthlyRevenue.Add(new Dictionary<string, object?>
+                    {
+                        ["month"] = reader.IsDBNull(reader.GetOrdinal("monthKey")) ? null : reader.GetString("monthKey"),
+                        ["revenue"] = reader.IsDBNull(reader.GetOrdinal("revenue")) ? 0m : reader.GetDecimal("revenue")
+                    });
+                }
+            }
+
+            var topCustomers = new List<Dictionary<string, object?>>();
+            const string customersSql = $"""
+                SELECT c.customerid AS customerId,
+                       c.fname,
+                       c.lname,
+                       SUM(h.price * r.numberofhikers) AS totalSpend,
+                       COUNT(*) AS reservationCount
+                FROM reservation r
+                INNER JOIN hikingtrip h ON h.tripid = r.tripid
+                INNER JOIN customer c ON c.customerid = r.customerid
+                WHERE {notCancelled}
+                GROUP BY c.customerid, c.fname, c.lname
+                ORDER BY totalSpend DESC
+                LIMIT 15;
+                """;
+            await using (var cmd = new MySqlCommand(customersSql, connection))
+            await using (var reader = await cmd.ExecuteReaderAsync(cancellationToken))
+            {
+                while (await reader.ReadAsync(cancellationToken))
+                {
+                    var cid = reader.GetInt32("customerId");
+                    var fn = reader.IsDBNull(reader.GetOrdinal("fname")) ? "" : reader.GetString("fname");
+                    var ln = reader.IsDBNull(reader.GetOrdinal("lname")) ? "" : reader.GetString("lname");
+                    var nm = string.Join(' ', new[] { fn, ln }.Where(s => !string.IsNullOrWhiteSpace(s))).Trim();
+                    topCustomers.Add(new Dictionary<string, object?>
+                    {
+                        ["customerId"] = cid,
+                        ["name"] = string.IsNullOrWhiteSpace(nm) ? $"Customer #{cid}" : nm,
+                        ["totalSpend"] = reader.IsDBNull(reader.GetOrdinal("totalSpend")) ? 0m : reader.GetDecimal("totalSpend"),
+                        ["reservationCount"] = reader.IsDBNull(reader.GetOrdinal("reservationCount"))
+                            ? 0
+                            : Convert.ToInt32(reader.GetInt64("reservationCount"))
+                    });
+                }
+            }
+
+            var categoryRevenue = new List<Dictionary<string, object?>>();
+            const string categorySql = $"""
+                SELECT COALESCE(NULLIF(TRIM(h.category), ''), '(Uncategorized)') AS category,
+                       SUM(h.price * r.numberofhikers) AS revenue
+                FROM reservation r
+                INNER JOIN hikingtrip h ON h.tripid = r.tripid
+                WHERE {notCancelled}
+                GROUP BY COALESCE(NULLIF(TRIM(h.category), ''), '(Uncategorized)')
+                ORDER BY revenue DESC;
+                """;
+            await using (var cmd = new MySqlCommand(categorySql, connection))
+            await using (var reader = await cmd.ExecuteReaderAsync(cancellationToken))
+            {
+                while (await reader.ReadAsync(cancellationToken))
+                {
+                    categoryRevenue.Add(new Dictionary<string, object?>
+                    {
+                        ["category"] = reader.GetString("category"),
+                        ["revenue"] = reader.IsDBNull(reader.GetOrdinal("revenue")) ? 0m : reader.GetDecimal("revenue")
+                    });
+                }
+            }
+
+            var tripsByDifficulty = new List<Dictionary<string, object?>>();
+            const string difficultySql = """
+                SELECT COALESCE(NULLIF(TRIM(h.difficultylevel), ''), '(Unknown)') AS difficulty,
+                       COUNT(DISTINCT h.tripid) AS tripCount,
+                       COALESCE(SUM(CASE
+                           WHEN LOWER(TRIM(COALESCE(r.resstatus, ''))) NOT IN ('cancelled', 'canceled')
+                           THEN r.numberofhikers
+                           ELSE 0
+                       END), 0) AS bookedSeats
+                FROM hikingtrip h
+                LEFT JOIN reservation r ON r.tripid = h.tripid
+                GROUP BY COALESCE(NULLIF(TRIM(h.difficultylevel), ''), '(Unknown)')
+                ORDER BY tripCount DESC, difficulty ASC;
+                """;
+            await using (var cmd = new MySqlCommand(difficultySql, connection))
+            await using (var reader = await cmd.ExecuteReaderAsync(cancellationToken))
+            {
+                while (await reader.ReadAsync(cancellationToken))
+                {
+                    tripsByDifficulty.Add(new Dictionary<string, object?>
+                    {
+                        ["difficulty"] = reader.GetString("difficulty"),
+                        ["tripCount"] = reader.GetInt32("tripCount"),
+                        ["bookedSeats"] = reader.IsDBNull(reader.GetOrdinal("bookedSeats"))
+                            ? 0m
+                            : Convert.ToDecimal(reader.GetValue(reader.GetOrdinal("bookedSeats")))
+                    });
+                }
+            }
+
+            var reservationStatus = new List<Dictionary<string, object?>>();
+            const string statusSql = """
+                SELECT COALESCE(NULLIF(TRIM(resstatus), ''), '(Unknown)') AS status,
+                       COUNT(*) AS reservationCount
+                FROM reservation
+                GROUP BY COALESCE(NULLIF(TRIM(resstatus), ''), '(Unknown)')
+                ORDER BY reservationCount DESC;
+                """;
+            await using (var cmd = new MySqlCommand(statusSql, connection))
+            await using (var reader = await cmd.ExecuteReaderAsync(cancellationToken))
+            {
+                while (await reader.ReadAsync(cancellationToken))
+                {
+                    var cntOrd = reader.GetOrdinal("reservationCount");
+                    var cntLong = reader.IsDBNull(cntOrd) ? 0L : Convert.ToInt64(reader.GetValue(cntOrd), CultureInfo.InvariantCulture);
+                    reservationStatus.Add(new Dictionary<string, object?>
+                    {
+                        ["status"] = reader.GetString("status"),
+                        ["count"] = cntLong > int.MaxValue ? int.MaxValue : (int)cntLong
+                    });
+                }
+            }
+
+            return Ok(new
+            {
+                monthlyRevenue,
+                topCustomers,
+                categoryRevenue,
+                tripsByDifficulty,
+                reservationStatus
+            });
+        }
+        catch (MySqlException ex)
+        {
+            return DatabaseUnavailable(ex);
+        }
+    }
 
     [HttpGet("schema")]
     public async Task<IActionResult> GetSchema(CancellationToken cancellationToken)
