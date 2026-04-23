@@ -102,6 +102,26 @@ const dataStore = {
   guidedTrips: []
 };
 
+/** Mirrors Add Trip fields; used client-side on the Trips list. */
+function createDefaultTripFilters() {
+  return {
+    nameQuery: "",
+    locationQuery: "",
+    distanceMin: "",
+    distanceMax: "",
+    dateFrom: "",
+    dateTo: "",
+    priceMin: "",
+    priceMax: "",
+    hikersMin: "",
+    hikersMax: "",
+    difficulty: "",
+    category: "",
+    timeFrom: "",
+    timeTo: ""
+  };
+}
+
 const state = {
   route: "home",
   selectedTripId: null,
@@ -118,7 +138,8 @@ const state = {
   /** When true, after routing to Trips auto-open the Add Trip modal. */
   openAddTripModal: false,
   /** Admin Reports: which `adminReportCardMeta.key` is shown. */
-  reportTab: adminReportCardMeta[0].key
+  reportTab: adminReportCardMeta[0].key,
+  tripFilters: createDefaultTripFilters()
 };
 
 /** Previous { route, selectedTripId } snapshots for Back (not browser history). */
@@ -652,6 +673,101 @@ function normalizeText(value, fallback = "") {
 function normalizeNumber(value, fallback = 0) {
   const num = Number(value);
   return Number.isFinite(num) ? num : fallback;
+}
+
+function tripDistanceMiles(trip) {
+  const raw = trip?.distanceInput;
+  if (raw != null && String(raw).trim() !== "") {
+    const n = Number(String(raw).replace(/[^0-9.-]/g, ""));
+    if (Number.isFinite(n)) return n;
+  }
+  const n2 = Number(String(trip?.distance ?? "").replace(/[^0-9.-]/g, ""));
+  return Number.isFinite(n2) ? n2 : null;
+}
+
+/** Minutes from midnight from `trip.timeInput` (HH:mm). */
+function tripStartMinutes(trip) {
+  const t = trip?.timeInput;
+  if (!t || typeof t !== "string") return null;
+  const m = t.trim().match(/^(\d{1,2}):(\d{2})/);
+  if (!m) return null;
+  const hh = Number(m[1]);
+  const mm = Number(m[2]);
+  if (!Number.isFinite(hh) || !Number.isFinite(mm)) return null;
+  return hh * 60 + mm;
+}
+
+function filterTimeStringToMinutes(value) {
+  if (value == null) return null;
+  const s = String(value).trim();
+  if (!s) return null;
+  const m = s.match(/^(\d{1,2}):(\d{2})/);
+  if (!m) return null;
+  return Number(m[1]) * 60 + Number(m[2]);
+}
+
+function filterTripsList(trips, f) {
+  const nameQ = String(f.nameQuery || "").trim().toLowerCase();
+  const locQ = String(f.locationQuery || "").trim().toLowerCase();
+  const dMin = String(f.distanceMin ?? "").trim();
+  const dMax = String(f.distanceMax ?? "").trim();
+  const dMinN = dMin === "" ? null : Number(dMin);
+  const dMaxN = dMax === "" ? null : Number(dMax);
+  const dateFrom = String(f.dateFrom || "").trim();
+  const dateTo = String(f.dateTo || "").trim();
+  const pMin = String(f.priceMin ?? "").trim();
+  const pMax = String(f.priceMax ?? "").trim();
+  const pMinN = pMin === "" ? null : Number(pMin);
+  const pMaxN = pMax === "" ? null : Number(pMax);
+  const hMin = String(f.hikersMin ?? "").trim();
+  const hMax = String(f.hikersMax ?? "").trim();
+  const hMinN = hMin === "" ? null : Number(hMin);
+  const hMaxN = hMax === "" ? null : Number(hMax);
+  const diff = String(f.difficulty || "").trim().toLowerCase();
+  const cat = String(f.category || "").trim().toLowerCase();
+  const tFrom = filterTimeStringToMinutes(f.timeFrom);
+  const tTo = filterTimeStringToMinutes(f.timeTo);
+  const hasTimeFilter = tFrom != null || tTo != null;
+
+  return trips.filter((trip) => {
+    if (nameQ && !String(trip.name || "").toLowerCase().includes(nameQ)) return false;
+    if (locQ && !String(trip.location || "").toLowerCase().includes(locQ)) return false;
+
+    if (dMinN != null && Number.isFinite(dMinN)) {
+      const miles = tripDistanceMiles(trip);
+      if (miles == null || miles < dMinN) return false;
+    }
+    if (dMaxN != null && Number.isFinite(dMaxN)) {
+      const miles = tripDistanceMiles(trip);
+      if (miles == null || miles > dMaxN) return false;
+    }
+
+    const day = String(trip.dateInput || "").trim();
+    if (dateFrom) {
+      if (!day || day < dateFrom) return false;
+    }
+    if (dateTo) {
+      if (!day || day > dateTo) return false;
+    }
+
+    if (pMinN != null && Number.isFinite(pMinN) && !(Number(trip.price) >= pMinN)) return false;
+    if (pMaxN != null && Number.isFinite(pMaxN) && !(Number(trip.price) <= pMaxN)) return false;
+
+    if (hMinN != null && Number.isFinite(hMinN) && !(Number(trip.hikers) >= hMinN)) return false;
+    if (hMaxN != null && Number.isFinite(hMaxN) && !(Number(trip.hikers) <= hMaxN)) return false;
+
+    if (diff && String(trip.difficulty || "").trim().toLowerCase() !== diff) return false;
+    if (cat && String(trip.category || "").trim().toLowerCase() !== cat) return false;
+
+    if (hasTimeFilter) {
+      const tm = tripStartMinutes(trip);
+      if (tm == null) return false;
+      if (tFrom != null && tm < tFrom) return false;
+      if (tTo != null && tm > tTo) return false;
+    }
+
+    return true;
+  });
 }
 
 function normalizeTrip(row) {
@@ -2000,32 +2116,19 @@ function renderTrips() {
   const isEmployee = currentUser?.role === "employee";
   const isHiker = currentUser?.role === "hiker";
   const leadingIds = new Set((dataStore.guidedTrips || []).map((t) => Number(t.id)).filter((n) => Number.isFinite(n)));
-  return `
-    <section class="tb-section">
-      <div class="d-flex justify-content-between align-items-center mb-3">
-        <h1 class="h2 mb-0">All Hiking Trips</h1>
-        <div class="d-flex align-items-center gap-2">
-          <span class="tb-muted">${dataStore.trips.length} trips available</span>
-          <button class="btn btn-sm tb-btn-primary" data-bs-toggle="modal" data-bs-target="#addTripModal">Add Trip</button>
-        </div>
-      </div>
-      <div class="row g-3">
-        ${
-          dataStore.trips.length === 0
-            ? `
-          <div class="col-12">
-            <article class="card h-100 tb-card">
-              <div class="card-body">
-                <h2 class="h5 card-title mb-2">No Trips Loaded</h2>
-                <p class="tb-muted mb-0">Trip cards will render here once your sample data is added.</p>
-              </div>
-            </article>
-          </div>
-        `
-            : `
-        ${dataStore.trips
-          .map(
-            (trip) => `
+  const tf = state.tripFilters;
+  const allTrips = dataStore.trips;
+  const filteredTrips = filterTripsList(allTrips, tf);
+  const difficulties = [...new Set(allTrips.map((t) => String(t.difficulty || "").trim()).filter(Boolean))].sort(
+    (a, b) => a.localeCompare(b, undefined, { sensitivity: "base" })
+  );
+  const categories = [...new Set(allTrips.map((t) => String(t.category || "").trim()).filter(Boolean))].sort(
+    (a, b) => a.localeCompare(b, undefined, { sensitivity: "base" })
+  );
+  const tripCardsHtml = (trips) =>
+    trips
+      .map(
+        (trip) => `
           <div class="col-sm-6 col-lg-4">
             <article class="card h-100 tb-card">
               <div class="card-body d-flex flex-column">
@@ -2039,11 +2142,12 @@ function renderTrips() {
                         : ""
                     }
                   </div>
-                  <span class="badge tb-badge ${difficultyBadgeClass(trip.difficulty)}">${trip.difficulty}</span>
+                  <span class="badge tb-badge ${difficultyBadgeClass(trip.difficulty)}">${escapeHtml(trip.difficulty)}</span>
                 </div>
                 <p class="tb-muted mb-1">${escapeHtml(trip.location)}</p>
-                <p class="mb-2">${trip.category}</p>
-                <p class="mb-4"><strong>${money(trip.price)}</strong></p>
+                <p class="mb-2">${escapeHtml(trip.category)}</p>
+                <p class="mb-1 small tb-muted">${escapeHtml(String(trip.date))} · ${escapeHtml(trip.time)} · ${escapeHtml(trip.distance)}</p>
+                <p class="mb-4"><strong>${money(trip.price)}</strong> <span class="tb-muted small">· up to ${trip.hikers} hikers</span></p>
                 <div class="mt-auto d-flex gap-2">
                   ${
                     isHiker
@@ -2060,9 +2164,126 @@ function renderTrips() {
             </article>
           </div>
         `
-          )
-          .join("")}
+      )
+      .join("");
+
+  return `
+    <section class="tb-section">
+      <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+        <h1 class="h2 mb-0">All Hiking Trips</h1>
+        <div class="d-flex align-items-center gap-2">
+          <span class="tb-muted">${filteredTrips.length === allTrips.length ? `${allTrips.length} trips` : `${filteredTrips.length} of ${allTrips.length} trips`}</span>
+          <button class="btn btn-sm tb-btn-primary" data-bs-toggle="modal" data-bs-target="#addTripModal">Add Trip</button>
+        </div>
+      </div>
+
+      <div class="accordion mb-3" id="tripFiltersAccordion">
+        <div class="accordion-item tb-card border-0">
+          <h2 class="accordion-header">
+            <button class="accordion-button collapsed py-2" type="button" data-bs-toggle="collapse" data-bs-target="#tripFiltersCollapse" aria-expanded="false" aria-controls="tripFiltersCollapse">
+              Filter hikes
+            </button>
+          </h2>
+          <div id="tripFiltersCollapse" class="accordion-collapse collapse" data-bs-parent="#tripFiltersAccordion">
+            <div class="accordion-body pt-0">
+              <form id="trip-filters-form" class="row g-2 g-md-3 align-items-end">
+                <div class="col-md-6 col-lg-4">
+                  <label class="form-label small mb-0" for="filter-trip-name">Trip name</label>
+                  <input class="form-control form-control-sm" id="filter-trip-name" name="nameQuery" value="${escapeHtml(tf.nameQuery)}" placeholder="Contains…" autocomplete="off" />
+                </div>
+                <div class="col-md-6 col-lg-4">
+                  <label class="form-label small mb-0" for="filter-trip-location">Location</label>
+                  <input class="form-control form-control-sm" id="filter-trip-location" name="locationQuery" value="${escapeHtml(tf.locationQuery)}" placeholder="Contains…" autocomplete="off" />
+                </div>
+                <div class="col-6 col-md-3 col-lg-2">
+                  <label class="form-label small mb-0" for="filter-distance-min">Distance (mi) min</label>
+                  <input type="number" min="0" step="0.1" class="form-control form-control-sm" id="filter-distance-min" name="distanceMin" value="${escapeHtml(tf.distanceMin)}" />
+                </div>
+                <div class="col-6 col-md-3 col-lg-2">
+                  <label class="form-label small mb-0" for="filter-distance-max">Distance (mi) max</label>
+                  <input type="number" min="0" step="0.1" class="form-control form-control-sm" id="filter-distance-max" name="distanceMax" value="${escapeHtml(tf.distanceMax)}" />
+                </div>
+                <div class="col-6 col-md-3 col-lg-2">
+                  <label class="form-label small mb-0" for="filter-date-from">Date from</label>
+                  <input type="date" class="form-control form-control-sm" id="filter-date-from" name="dateFrom" value="${escapeHtml(tf.dateFrom)}" />
+                </div>
+                <div class="col-6 col-md-3 col-lg-2">
+                  <label class="form-label small mb-0" for="filter-date-to">Date to</label>
+                  <input type="date" class="form-control form-control-sm" id="filter-date-to" name="dateTo" value="${escapeHtml(tf.dateTo)}" />
+                </div>
+                <div class="col-6 col-md-3 col-lg-2">
+                  <label class="form-label small mb-0" for="filter-price-min">Price min</label>
+                  <input type="number" min="0" step="0.01" class="form-control form-control-sm" id="filter-price-min" name="priceMin" value="${escapeHtml(tf.priceMin)}" />
+                </div>
+                <div class="col-6 col-md-3 col-lg-2">
+                  <label class="form-label small mb-0" for="filter-price-max">Price max</label>
+                  <input type="number" min="0" step="0.01" class="form-control form-control-sm" id="filter-price-max" name="priceMax" value="${escapeHtml(tf.priceMax)}" />
+                </div>
+                <div class="col-6 col-md-3 col-lg-2">
+                  <label class="form-label small mb-0" for="filter-hikers-min">Group size min</label>
+                  <input type="number" min="1" step="1" class="form-control form-control-sm" id="filter-hikers-min" name="hikersMin" value="${escapeHtml(tf.hikersMin)}" />
+                </div>
+                <div class="col-6 col-md-3 col-lg-2">
+                  <label class="form-label small mb-0" for="filter-hikers-max">Group size max</label>
+                  <input type="number" min="1" step="1" class="form-control form-control-sm" id="filter-hikers-max" name="hikersMax" value="${escapeHtml(tf.hikersMax)}" />
+                </div>
+                <div class="col-md-6 col-lg-3">
+                  <label class="form-label small mb-0" for="filter-difficulty">Difficulty</label>
+                  <select class="form-select form-select-sm" id="filter-difficulty" name="difficulty">
+                    <option value="">Any</option>
+                    ${difficulties.map((d) => `<option value="${escapeHtml(d)}"${String(tf.difficulty).toLowerCase() === d.toLowerCase() ? " selected" : ""}>${escapeHtml(d)}</option>`).join("")}
+                  </select>
+                </div>
+                <div class="col-md-6 col-lg-3">
+                  <label class="form-label small mb-0" for="filter-category">Category</label>
+                  <select class="form-select form-select-sm" id="filter-category" name="category">
+                    <option value="">Any</option>
+                    ${categories.map((c) => `<option value="${escapeHtml(c)}"${String(tf.category).toLowerCase() === c.toLowerCase() ? " selected" : ""}>${escapeHtml(c)}</option>`).join("")}
+                  </select>
+                </div>
+                <div class="col-6 col-md-3 col-lg-2">
+                  <label class="form-label small mb-0" for="filter-time-from">Start time from</label>
+                  <input type="time" class="form-control form-control-sm" id="filter-time-from" name="timeFrom" value="${escapeHtml(tf.timeFrom)}" />
+                </div>
+                <div class="col-6 col-md-3 col-lg-2">
+                  <label class="form-label small mb-0" for="filter-time-to">Start time to</label>
+                  <input type="time" class="form-control form-control-sm" id="filter-time-to" name="timeTo" value="${escapeHtml(tf.timeTo)}" />
+                </div>
+                <div class="col-12 col-lg-auto d-flex flex-wrap gap-2 mt-1">
+                  <button type="submit" class="btn btn-sm tb-btn-primary">Apply filters</button>
+                  <button type="button" class="btn btn-sm btn-outline-secondary" data-trip-filters-clear>Clear</button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="row g-3">
+        ${
+          allTrips.length === 0
+            ? `
+          <div class="col-12">
+            <article class="card h-100 tb-card">
+              <div class="card-body">
+                <h2 class="h5 card-title mb-2">No Trips Loaded</h2>
+                <p class="tb-muted mb-0">Trip cards will render here once your sample data is added.</p>
+              </div>
+            </article>
+          </div>
         `
+            : filteredTrips.length === 0
+              ? `
+          <div class="col-12">
+            <article class="card h-100 tb-card">
+              <div class="card-body">
+                <h2 class="h5 card-title mb-2">No matching trips</h2>
+                <p class="tb-muted mb-0">Try widening or clearing filters.</p>
+              </div>
+            </article>
+          </div>
+        `
+              : tripCardsHtml(filteredTrips)
         }
       </div>
     </section>
@@ -2851,6 +3072,14 @@ document.addEventListener("click", async (event) => {
     return;
   }
 
+  const tripFiltersClearBtn = event.target.closest("[data-trip-filters-clear]");
+  if (tripFiltersClearBtn) {
+    event.preventDefault();
+    state.tripFilters = createDefaultTripFilters();
+    render();
+    return;
+  }
+
   const logoutTarget = event.target.closest("#logout-btn");
   if (logoutTarget) {
     event.preventDefault();
@@ -3594,6 +3823,30 @@ document.addEventListener("submit", async (event) => {
       messageElement.textContent = error?.message || "Failed to create trip.";
     }
   }
+});
+
+document.addEventListener("submit", (event) => {
+  const tripFiltersForm = event.target.closest("#trip-filters-form");
+  if (!tripFiltersForm) return;
+  event.preventDefault();
+  const fd = new FormData(tripFiltersForm);
+  state.tripFilters = {
+    nameQuery: String(fd.get("nameQuery") || "").trim(),
+    locationQuery: String(fd.get("locationQuery") || "").trim(),
+    distanceMin: String(fd.get("distanceMin") ?? "").trim(),
+    distanceMax: String(fd.get("distanceMax") ?? "").trim(),
+    dateFrom: String(fd.get("dateFrom") ?? "").trim(),
+    dateTo: String(fd.get("dateTo") ?? "").trim(),
+    priceMin: String(fd.get("priceMin") ?? "").trim(),
+    priceMax: String(fd.get("priceMax") ?? "").trim(),
+    hikersMin: String(fd.get("hikersMin") ?? "").trim(),
+    hikersMax: String(fd.get("hikersMax") ?? "").trim(),
+    difficulty: String(fd.get("difficulty") ?? "").trim(),
+    category: String(fd.get("category") ?? "").trim(),
+    timeFrom: String(fd.get("timeFrom") ?? "").trim(),
+    timeTo: String(fd.get("timeTo") ?? "").trim()
+  };
+  render();
 });
 
 currentUser = loadStoredCurrentUser();
